@@ -32,8 +32,10 @@
 
 ```bash
 cd /Users/amir/src/aiwithtools
-go mod init github.com/amir/aiwithtools
+go mod init aiwithtools
 ```
+
+This uses a bare module path (no `github.com/...`) because the project is local; `go install ./cmd/aiwithtools` still works. If you publish to GitHub later, run `go mod edit -module github.com/<you>/aiwithtools` and update internal import paths in one pass.
 
 - [ ] **Step 1.2: Add dependencies**
 
@@ -133,6 +135,7 @@ CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
 package session
 
 import (
+    "os"
     "path/filepath"
     "testing"
 )
@@ -169,33 +172,6 @@ func TestOpen_FilePermIs0600(t *testing.T) {
     s, err := Open(path)
     if err != nil { t.Fatal(err) }
     defer s.Close()
-    info, err := osStat(path)
-    if err != nil { t.Fatal(err) }
-    if perm := info.Mode().Perm(); perm != 0600 {
-        t.Errorf("perm = %o, want 0600", perm)
-    }
-}
-
-// indirection so test compiles before we import os in store.go test scope
-func osStat(path string) (fileInfo, error) { return statShim(path) }
-```
-
-Note: the `osStat`/`statShim` indirection is awkward. Simplify by importing `os` directly:
-
-```go
-package session
-
-import (
-    "os"
-    "path/filepath"
-    "testing"
-)
-
-func TestOpen_FilePermIs0600(t *testing.T) {
-    path := filepath.Join(t.TempDir(), "sessions.db")
-    s, err := Open(path)
-    if err != nil { t.Fatal(err) }
-    defer s.Close()
     info, err := os.Stat(path)
     if err != nil { t.Fatal(err) }
     if perm := info.Mode().Perm(); perm != 0600 {
@@ -203,8 +179,6 @@ func TestOpen_FilePermIs0600(t *testing.T) {
     }
 }
 ```
-
-Use the `os.Stat` version. Delete the indirection code from the snippet above when writing the file.
 
 - [ ] **Step 2.3: Run tests, see failures**
 
@@ -354,16 +328,16 @@ func TestAppend_BumpsUpdatedAt(t *testing.T) {
     s := newStore(t)
     sess, err := s.Create("m", "")
     if err != nil { t.Fatal(err) }
-    before := sess.UpdatedAt
-    time.Sleep(1100 * time.Millisecond) // updated_at is unix seconds
+    before := sess.UpdatedAt.UnixNano()
+    time.Sleep(2 * time.Millisecond) // enough to differ at nanosecond precision on any clock
     if err := sess.AppendUser("hi"); err != nil { t.Fatal(err) }
 
     var updated int64
     if err := s.db.QueryRow(`SELECT updated_at FROM sessions WHERE id = ?`, sess.ID).Scan(&updated); err != nil {
         t.Fatal(err)
     }
-    if updated <= before.Unix() {
-        t.Errorf("updated_at not bumped: was %d, now %d", before.Unix(), updated)
+    if updated <= before {
+        t.Errorf("updated_at not bumped: was %d, now %d", before, updated)
     }
 }
 
@@ -437,7 +411,7 @@ func (s *Store) Create(model, system string) (*Session, error) {
     now := time.Now()
     _, err := s.db.Exec(
         `INSERT INTO sessions(id, model, system, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-        id, model, system, now.Unix(), now.Unix(),
+        id, model, system, now.UnixNano(), now.UnixNano(),
     )
     if err != nil {
         return nil, fmt.Errorf("insert session: %w", err)
@@ -479,11 +453,11 @@ func (s *Session) appendRaw(role, content, toolName string, toolCalls []ToolCall
 
     if _, err := tx.Exec(
         `INSERT INTO messages(session_id, seq, role, content, tool_calls, tool_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        s.ID, seq, role, content, tcJSON, tn, now.Unix(),
+        s.ID, seq, role, content, tcJSON, tn, now.UnixNano(),
     ); err != nil {
         return fmt.Errorf("insert message: %w", err)
     }
-    if _, err := tx.Exec(`UPDATE sessions SET updated_at = ? WHERE id = ?`, now.Unix(), s.ID); err != nil {
+    if _, err := tx.Exec(`UPDATE sessions SET updated_at = ? WHERE id = ?`, now.UnixNano(), s.ID); err != nil {
         return fmt.Errorf("bump updated_at: %w", err)
     }
     if err := tx.Commit(); err != nil { return err }
@@ -669,12 +643,13 @@ package session
 import (
     "database/sql"
     "fmt"
+    "time"
 )
 
 type Summary struct {
     ID               string
     Model            string
-    UpdatedAt        int64 // unix seconds
+    UpdatedAt        time.Time
     MessageCount     int
     FirstUserMessage string
 }
@@ -716,9 +691,11 @@ func (s *Store) List(modelFilter string) ([]Summary, error) {
     var out []Summary
     for rows.Next() {
         var sum Summary
-        if err := rows.Scan(&sum.ID, &sum.Model, &sum.UpdatedAt, &sum.MessageCount, &sum.FirstUserMessage); err != nil {
+        var updated int64
+        if err := rows.Scan(&sum.ID, &sum.Model, &updated, &sum.MessageCount, &sum.FirstUserMessage); err != nil {
             return nil, err
         }
+        sum.UpdatedAt = time.Unix(0, updated)
         out = append(out, sum)
     }
     return out, rows.Err()
@@ -849,8 +826,8 @@ func (s *Store) Load(id string) (*Session, error) {
         return nil, fmt.Errorf("session %q not found", id)
     }
     if err != nil { return nil, err }
-    sess.CreatedAt = time.Unix(createdAt, 0)
-    sess.UpdatedAt = time.Unix(updatedAt, 0)
+    sess.CreatedAt = time.Unix(0, createdAt)
+    sess.UpdatedAt = time.Unix(0, updatedAt)
     sess.store = s
 
     if err := sess.repairDanglingToolCalls(); err != nil {
@@ -1054,7 +1031,8 @@ func TestToOllamaTool_PassesThroughSchema(t *testing.T) {
         Description: "Get the weather forecast",
         InputSchema: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
     }
-    out := ToOllamaTool(in)
+    out, err := ToOllamaTool(in)
+    if err != nil { t.Fatal(err) }
     if out.Type != "function" {
         t.Errorf("Type = %q, want function", out.Type)
     }
@@ -1066,17 +1044,28 @@ func TestToOllamaTool_PassesThroughSchema(t *testing.T) {
     }
 }
 
-func TestToOllamaTools_ConvertsAll(t *testing.T) {
+func TestToOllamaTools_ConvertsAllAndReportsBadSchemas(t *testing.T) {
     in := []Tool{
         {Name: "a", InputSchema: json.RawMessage(`{"type":"object"}`)},
+        {Name: "broken", InputSchema: json.RawMessage(`not json`)},
         {Name: "b", InputSchema: json.RawMessage(`{"type":"object"}`)},
     }
-    out := ToOllamaTools(in)
+    out, errs := ToOllamaTools(in)
     if len(out) != 2 {
-        t.Fatalf("len = %d, want 2", len(out))
+        t.Fatalf("converted len = %d, want 2 (broken should be skipped)", len(out))
     }
     if out[0].Function.Name != "a" || out[1].Function.Name != "b" {
         t.Errorf("names: %q %q", out[0].Function.Name, out[1].Function.Name)
+    }
+    if len(errs) != 1 {
+        t.Fatalf("errs len = %d, want 1", len(errs))
+    }
+}
+
+func TestToOllamaTool_ReturnsErrorOnBadSchema(t *testing.T) {
+    in := Tool{Name: "x", InputSchema: json.RawMessage(`not json`)}
+    if _, err := ToOllamaTool(in); err == nil {
+        t.Fatal("expected error for invalid schema")
     }
 }
 ```
@@ -1094,6 +1083,7 @@ package llm
 
 import (
     "encoding/json"
+    "fmt"
 
     "github.com/ollama/ollama/api"
 )
@@ -1106,29 +1096,34 @@ type Tool struct {
     InputSchema json.RawMessage
 }
 
-func ToOllamaTool(t Tool) api.Tool {
-    // api.Tool.Function takes a parameters struct; the simplest robust
-    // path is to round-trip the inputSchema through json.RawMessage so
-    // anything valid is accepted. We construct via map and re-marshal
-    // because api.ToolFunction shape evolves.
+// ToOllamaTool converts one MCP-style tool definition to api.Tool.
+// Returns an error if InputSchema can't be unmarshalled into the
+// Ollama parameter struct — callers should log and skip rather than
+// silently registering a broken tool.
+func ToOllamaTool(t Tool) (api.Tool, error) {
     var fn api.ToolFunction
     fn.Name = t.Name
     fn.Description = t.Description
-    // Parameters is itself a struct in api; the safe path is to
-    // Unmarshal our raw schema into it.
-    _ = json.Unmarshal(t.InputSchema, &fn.Parameters)
-    return api.Tool{
-        Type:     "function",
-        Function: fn,
+    if err := json.Unmarshal(t.InputSchema, &fn.Parameters); err != nil {
+        return api.Tool{}, fmt.Errorf("decode schema for %q: %w", t.Name, err)
     }
+    return api.Tool{Type: "function", Function: fn}, nil
 }
 
-func ToOllamaTools(in []Tool) api.Tools {
-    out := make(api.Tools, len(in))
-    for i := range in {
-        out[i] = ToOllamaTool(in[i])
+// ToOllamaTools converts a batch, skipping tools whose schema fails to
+// decode. The returned errors slice has one entry per skipped tool.
+func ToOllamaTools(in []Tool) (api.Tools, []error) {
+    out := make(api.Tools, 0, len(in))
+    var errs []error
+    for _, t := range in {
+        tool, err := ToOllamaTool(t)
+        if err != nil {
+            errs = append(errs, err)
+            continue
+        }
+        out = append(out, tool)
     }
-    return out
+    return out, errs
 }
 ```
 
@@ -1345,6 +1340,14 @@ func TestExpand_OtherVarsPassThrough(t *testing.T) {
     }
 }
 
+func TestExpand_WordBoundaryRespected(t *testing.T) {
+    // $HOMEY is a single unknown variable, NOT $HOME followed by "Y".
+    got := expandPath("$HOMEY/x", "/home/amir", "amir")
+    if got != "$HOMEY/x" {
+        t.Errorf("got %q, want $HOMEY/x", got)
+    }
+}
+
 func TestExpand_NoExpansionWhenNothingToDo(t *testing.T) {
     got := expandPath("/abs/path", "/home/amir", "amir")
     if got != "/abs/path" {
@@ -1358,20 +1361,31 @@ func TestExpand_NoExpansionWhenNothingToDo(t *testing.T) {
 ```go
 package mcp
 
-import "strings"
+import (
+    "os"
+    "strings"
+)
 
 // expandPath performs the limited set of substitutions documented in
 // the spec: leading `~/`, `$HOME`, `$USER`. No other env-var expansion
-// is done. The substitutions are applied verbatim and idempotent.
+// is done. Uses os.Expand for word-boundary-aware variable substitution
+// so "$HOMEY" doesn't expand to "/home/amirY" — `$HOMEY` is treated as
+// a single unknown variable and left as-is.
 func expandPath(s, home, user string) string {
     if strings.HasPrefix(s, "~/") {
         s = home + s[1:]
     } else if s == "~" {
         s = home
     }
-    s = strings.ReplaceAll(s, "$HOME", home)
-    s = strings.ReplaceAll(s, "$USER", user)
-    return s
+    return os.Expand(s, func(name string) string {
+        switch name {
+        case "HOME":
+            return home
+        case "USER":
+            return user
+        }
+        return "$" + name // unknown var: pass through verbatim
+    })
 }
 ```
 
@@ -1800,6 +1814,7 @@ import (
     "encoding/json"
     "fmt"
     "log/slog"
+    "os"
     "sync"
     "time"
 
@@ -1849,8 +1864,11 @@ func (h *Host) connect(parentCtx context.Context, spec ServerSpec, budget time.D
     ctx, cancel := context.WithTimeout(parentCtx, budget)
     defer cancel()
 
-    // env slice in KEY=VALUE form
-    var env []string
+    // Always start from the parent's env so PATH/HOME/etc. flow through;
+    // mcp-go's stdio transport does not document whether nil/empty env
+    // means "inherit" or "empty," so we make it explicit. Config-provided
+    // env entries override or add to the parent env.
+    env := os.Environ()
     for k, v := range spec.Env {
         env = append(env, fmt.Sprintf("%s=%s", k, v))
     }
@@ -1916,7 +1934,9 @@ func (h *Host) Call(ctx context.Context, prefixed string, args map[string]any) (
 
     out := flattenResult(res)
     if res.IsError {
-        return out, fmt.Errorf("tool reported error: %s", out)
+        // Return the bare content as the error so callers (the agent)
+        // can format it once. The agent already prefixes "ERROR:".
+        return "", fmt.Errorf("%s", out)
     }
     return out, nil
 }
@@ -2012,7 +2032,7 @@ type fakeMCP struct {
     err map[string]error
 }
 
-func (f *fakeMCP) Tools() []api.Tool { return nil }
+func (f *fakeMCP) Tools() api.Tools { return nil }
 func (f *fakeMCP) Call(ctx context.Context, name string, args map[string]any) (string, error) {
     if e, ok := f.err[name]; ok { return "", e }
     return f.out[name], nil
@@ -2138,7 +2158,7 @@ type LLM interface {
 }
 
 type MCP interface {
-    Tools() []api.Tool
+    Tools() api.Tools
     Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
@@ -2354,6 +2374,8 @@ func (t Terminal) AssistantFinal(content string) {
 
 - [ ] **Step 15.2: Write `internal/repl/repl.go`**
 
+The signal handling here is the only subtle part: chzyer/readline handles SIGINT itself when blocked at the prompt (Ctrl-C clears the current line). We only want to forward SIGINT to a per-turn context cancel while `OnUser` is running. So we install a signal handler around `OnUser` and uninstall it after — leaving the prompt's default behavior intact between turns. SIGTERM is handled at a higher level (`main.go`) and cancels the parent ctx for full shutdown.
+
 ```go
 package repl
 
@@ -2362,41 +2384,51 @@ import (
     "fmt"
     "io"
     "os"
+    "os/signal"
     "strings"
 
     "github.com/chzyer/readline"
 )
 
 type Runner struct {
-    Prompt     string
-    Out        io.Writer
-    OnUser     func(ctx context.Context, line string) error
-    OnClear    func() error
-    OnTools    func() string
-    OnExit     func() error
+    Prompt  string
+    Out     io.Writer
+    OnUser  func(ctx context.Context, line string) error
+    OnClear func() error
+    OnTools func() string
+    OnExit  func() error
 }
 
-// Run blocks until the user exits. Handles slash commands inline and
-// dispatches free-text lines to OnUser. Ctrl-C cancels the in-flight
-// turn but does not exit the REPL.
+// Run blocks until the user exits or ctx is cancelled (SIGTERM).
+// Slash commands are handled inline; free-text lines are dispatched to
+// OnUser with a per-turn context that SIGINT (Ctrl-C) cancels.
 func (r *Runner) Run(ctx context.Context) error {
     rl, err := readline.New(r.Prompt)
-    if err != nil { return err }
+    if err != nil {
+        return err
+    }
     defer rl.Close()
 
     for {
+        if err := ctx.Err(); err != nil {
+            return r.OnExit()
+        }
+
         line, err := rl.Readline()
         if err == readline.ErrInterrupt {
-            // empty Ctrl-C at the prompt: ignore.
-            continue
+            continue // Ctrl-C at the prompt: clear the line and re-prompt
         }
         if err == io.EOF {
             return r.OnExit()
         }
-        if err != nil { return err }
+        if err != nil {
+            return err
+        }
 
         line = strings.TrimSpace(line)
-        if line == "" { continue }
+        if line == "" {
+            continue
+        }
 
         if cmd, ok := ParseSlash(line); ok {
             switch cmd {
@@ -2414,31 +2446,36 @@ func (r *Runner) Run(ctx context.Context) error {
             continue
         }
 
-        turnCtx, cancel := context.WithCancel(ctx)
-        rl.Config.SetListener(func(line []rune, pos int, key rune) ([]rune, int, bool) { return line, pos, false })
-        // Ctrl-C during a turn cancels the context, freeing the agent.
-        sigCh := make(chan os.Signal, 1)
-        go func() {
-            <-sigCh
-            cancel()
-        }()
-        if err := r.OnUser(turnCtx, line); err != nil {
+        if err := r.runTurn(ctx, line); err != nil {
             fmt.Fprintf(r.Out, "error: %s\n", err)
         }
-        cancel()
     }
 }
-```
 
-Note: the Ctrl-C handling above is incomplete by design — readline already grabs SIGINT. The simpler path is to let readline handle interruption at the prompt and rely on context cancellation propagating from main's signal handler for in-turn cancel. Wire signal.Notify in `cmd/aiwithtools/main.go` instead, and simplify Run by removing the sigCh code. The final REPL just needs:
+// runTurn calls OnUser with a context that SIGINT cancels for the
+// duration of the call. After OnUser returns we uninstall the handler
+// so the next prompt's Ctrl-C goes back to chzyer/readline.
+func (r *Runner) runTurn(parent context.Context, line string) error {
+    turnCtx, cancel := context.WithCancel(parent)
+    defer cancel()
 
-```go
-if err := r.OnUser(ctx, line); err != nil {
-    fmt.Fprintf(r.Out, "error: %s\n", err)
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, os.Interrupt)
+    defer signal.Stop(sigCh)
+
+    done := make(chan struct{})
+    go func() {
+        select {
+        case <-sigCh:
+            cancel()
+        case <-done:
+        }
+    }()
+    err := r.OnUser(turnCtx, line)
+    close(done)
+    return err
 }
 ```
-
-Use that simpler form. Delete the sigCh/cancel block when writing.
 
 - [ ] **Step 15.3: Verify build**
 
@@ -2561,7 +2598,10 @@ func main() {
     root.AddCommand(newRunCmd())
     root.AddCommand(newSessionsCmd())
 
-    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    // SIGTERM only — SIGINT is owned by the REPL so Ctrl-C clears the
+    // line at the prompt and only cancels the in-flight turn during
+    // OnUser. See internal/repl/repl.go.
+    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
     defer cancel()
 
     if err := root.ExecuteContext(ctx); err != nil {
@@ -2580,7 +2620,7 @@ import (
     "context"
     "errors"
     "fmt"
-    "net/url"
+    "log/slog"
     "os"
     "path/filepath"
     "strings"
@@ -2589,11 +2629,11 @@ import (
     "github.com/ollama/ollama/api"
     "github.com/spf13/cobra"
 
-    "github.com/amir/aiwithtools/internal/agent"
-    "github.com/amir/aiwithtools/internal/llm"
-    "github.com/amir/aiwithtools/internal/mcp"
-    "github.com/amir/aiwithtools/internal/repl"
-    "github.com/amir/aiwithtools/internal/session"
+    "aiwithtools/internal/agent"
+    "aiwithtools/internal/llm"
+    "aiwithtools/internal/mcp"
+    "aiwithtools/internal/repl"
+    "aiwithtools/internal/session"
 )
 
 func newRunCmd() *cobra.Command {
@@ -2617,6 +2657,7 @@ func newRunCmd() *cobra.Command {
     cmd.Flags().StringVar(&systemFile, "system", "", "override system prompt file (default: ~/.config/aiwithtools/system.md)")
     cmd.Flags().IntVar(&maxIter, "max-iterations", 25, "maximum ReAct iterations per turn")
     cmd.Flags().BoolVar(&verbose, "verbose", false, "print full tool outputs in the REPL")
+    cmd.MarkFlagsMutuallyExclusive("continue", "resume")
     return cmd
 }
 
@@ -2653,13 +2694,11 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
     if err != nil { return err }
     defer host.Close()
 
-    // LLM client (talks to local Ollama daemon)
+    // LLM client (talks to local Ollama daemon).
+    // ClientFromEnvironment returns a default localhost client when
+    // OLLAMA_HOST is unset, so no extra fallback is needed.
     ollamaClient, err := api.ClientFromEnvironment()
-    if err != nil { return err }
-    if ollamaClient == nil {
-        u, _ := url.Parse("http://localhost:11434")
-        ollamaClient = api.NewClient(u, nil)
-    }
+    if err != nil { return fmt.Errorf("ollama client: %w", err) }
     llmClient := llm.New(ollamaClient)
 
     // Resolve / create the session
@@ -2675,7 +2714,10 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
     for _, t := range host.Tools() {
         tools = append(tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
     }
-    ollamaTools := llm.ToOllamaTools(tools)
+    ollamaTools, convErrs := llm.ToOllamaTools(tools)
+    for _, e := range convErrs {
+        slog.Warn("skipping tool with invalid schema", "err", e)
+    }
 
     // Adapter: agent expects an LLM that already knows the model + tools shape.
     llmAdapter := &llmAdapter{c: llmClient, tools: ollamaTools, sessSystem: sess.System, sessStart: sess.CreatedAt, now: time.Now}
@@ -2719,7 +2761,7 @@ func pickSession(store *session.Store, model string, cont, resume bool) (*sessio
         }
         for i, it := range items {
             fmt.Printf("%2d. %s  msgs=%d  last=%s  %q\n",
-                i+1, it.ID[:8], it.MessageCount, time.Unix(it.UpdatedAt, 0).Format(time.RFC3339), truncate(it.FirstUserMessage, 60))
+                i+1, it.ID[:8], it.MessageCount, it.UpdatedAt.Format(time.RFC3339), truncate(it.FirstUserMessage, 60))
         }
         fmt.Print("pick a number: ")
         var n int
@@ -2853,7 +2895,7 @@ import (
 
     "github.com/spf13/cobra"
 
-    "github.com/amir/aiwithtools/internal/session"
+    "aiwithtools/internal/session"
 )
 
 func newSessionsCmd() *cobra.Command {
@@ -2910,7 +2952,7 @@ func sessionsList(model string) error {
     for _, it := range items {
         fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n",
             it.ID[:8], it.Model,
-            time.Unix(it.UpdatedAt, 0).Format("2006-01-02 15:04"),
+            it.UpdatedAt.Format("2006-01-02 15:04"),
             it.MessageCount, truncate(it.FirstUserMessage, 50),
         )
     }
@@ -3092,13 +3134,21 @@ go build -o aiwithtools ./cmd/aiwithtools
 
 - [ ] **Step 20.4: Verify ReAct end-to-end**
 
-At the `>>>` prompt:
+First, find the exact tool name the text-saver server exposes:
+
+```
+>>> /tools
+```
+
+Expected output includes something like `text-saver__<name> — <description>`. The actual tool name depends on what the user's `text-saver.py` registers (could be `save_text`, `save`, `write_text`, etc.). Use that exact name in the rest of this step.
+
+Then, at the `>>>` prompt:
 
 ```
 >>> save the text 'hello' using the text-saver tool, then tell me what you did
 ```
 
-Expected output structure:
+Expected output structure (assuming the tool is named `save_text`; substitute whatever `/tools` reported):
 
 ```
 → text-saver__save_text({"text":"hello"})
@@ -3106,7 +3156,7 @@ Expected output structure:
 I've saved the text "hello"…
 ```
 
-If you see only a final answer with no `→` line, the model didn't call the tool. Check `/tools` shows it loaded.
+If you see only a final answer with no `→` line, the model didn't call the tool. Re-check `/tools` shows it loaded.
 
 - [ ] **Step 20.5: Verify resume works**
 
