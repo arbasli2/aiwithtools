@@ -33,7 +33,12 @@ func (c *Client) Chat(ctx context.Context, model string, messages []api.Message,
 	var last api.Message
 	err := c.ollama.Chat(ctx, req, func(resp api.ChatResponse) error {
 		last = resp.Message
-		if resp.Done && resp.DoneReason != "" && resp.DoneReason != "stop" {
+		// With Stream=false the callback fires once with the final
+		// response, so DoneReason here is the terminal one.
+		// Skip the warning when ToolCalls were emitted: some Ollama
+		// versions use a non-"stop" DoneReason for tool-call turns,
+		// which isn't actually a problem signal.
+		if resp.DoneReason != "" && resp.DoneReason != "stop" && len(resp.Message.ToolCalls) == 0 {
 			slog.Warn("ollama chat finished with non-stop reason",
 				"model", model, "reason", resp.DoneReason)
 		}

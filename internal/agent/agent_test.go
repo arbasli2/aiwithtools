@@ -38,14 +38,14 @@ func (f *fakeMCP) Call(ctx context.Context, name string, args map[string]any) (s
 type captureDisplay struct {
 	starts []string
 	ends   []string
-	finals []string
+	texts []string
 }
 
 func (c *captureDisplay) ToolCallStart(n string, _ map[string]any) {
 	c.starts = append(c.starts, n)
 }
 func (c *captureDisplay) ToolCallEnd(n, _ string, _ error) { c.ends = append(c.ends, n) }
-func (c *captureDisplay) AssistantText(s string)          { c.finals = append(c.finals, s) }
+func (c *captureDisplay) AssistantText(s string)          { c.texts = append(c.texts, s) }
 
 type fakeSession struct {
 	msgs []api.Message
@@ -87,8 +87,8 @@ func TestRun_NoToolCallsReturnsFinal(t *testing.T) {
 	if err := a.Run(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
 	}
-	if len(disp.finals) != 1 || disp.finals[0] != "hi!" {
-		t.Errorf("finals = %v", disp.finals)
+	if len(disp.texts) != 1 || disp.texts[0] != "hi!" {
+		t.Errorf("texts = %v", disp.texts)
 	}
 }
 
@@ -107,8 +107,8 @@ func TestRun_ToolCallThenFinal(t *testing.T) {
 	if len(disp.starts) != 1 || disp.starts[0] != "echo" {
 		t.Errorf("starts = %v", disp.starts)
 	}
-	if len(disp.finals) != 1 || disp.finals[0] != "done" {
-		t.Errorf("finals = %v", disp.finals)
+	if len(disp.texts) != 1 || disp.texts[0] != "done" {
+		t.Errorf("texts = %v", disp.texts)
 	}
 }
 
@@ -122,6 +122,50 @@ func TestRun_ToolErrorIsSerializedNotFatal(t *testing.T) {
 
 	if err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("want nil, got %v", err)
+	}
+}
+
+func TestRun_EmptyContentNoToolCallsShowsPlaceholder(t *testing.T) {
+	llm := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", Content: ""},
+	}}
+	disp := &captureDisplay{}
+	a := newAgent(llm, &fakeMCP{}, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 1 || disp.texts[0] != "(model returned no content)" {
+		t.Errorf("texts = %q, want placeholder", disp.texts)
+	}
+}
+
+func TestRun_ThinkingOnlyShowsThinking(t *testing.T) {
+	llm := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", Content: "", Thinking: "let me think..."},
+	}}
+	disp := &captureDisplay{}
+	a := newAgent(llm, &fakeMCP{}, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 1 || disp.texts[0] != "(thinking only — no final answer)\nlet me think..." {
+		t.Errorf("texts = %q, want thinking surface", disp.texts)
+	}
+}
+
+func TestRun_CommentaryAlongsideToolCallShowsBoth(t *testing.T) {
+	llm := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", Content: "Let me check.", ToolCalls: []api.ToolCall{toolCallWith("echo", map[string]any{})}},
+		{Role: "assistant", Content: "Done."},
+	}}
+	mcp := &fakeMCP{out: map[string]string{"echo": "ok"}}
+	disp := &captureDisplay{}
+	a := newAgent(llm, mcp, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 2 || disp.texts[0] != "Let me check." || disp.texts[1] != "Done." {
+		t.Errorf("texts = %q, want [\"Let me check.\", \"Done.\"]", disp.texts)
 	}
 }
 
