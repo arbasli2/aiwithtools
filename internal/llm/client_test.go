@@ -28,7 +28,7 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	msg, err := c.Chat(context.Background(), "test",
+	msg, reason, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "hi"}},
 		nil,
 	)
@@ -37,6 +37,32 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 	}
 	if msg.Role != "assistant" || msg.Content != "hello!" {
 		t.Errorf("msg = %+v", msg)
+	}
+	_ = reason
+}
+
+func TestChat_ReturnsDoneReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_ = json.NewEncoder(w).Encode(api.ChatResponse{
+			Model:      "test",
+			Message:    api.Message{Role: "assistant", Content: "truncated..."},
+			Done:       true,
+			DoneReason: "length",
+		})
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	c := New(api.NewClient(u, http.DefaultClient))
+
+	_, reason, err := c.Chat(context.Background(), "test",
+		[]api.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != "length" {
+		t.Errorf("reason = %q, want length", reason)
 	}
 }
 
@@ -61,7 +87,7 @@ func TestChat_SurfacesToolCalls(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	msg, err := c.Chat(context.Background(), "test",
+	msg, _, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "weather?"}},
 		nil,
 	)

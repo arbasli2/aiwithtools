@@ -10,16 +10,21 @@ import (
 
 type fakeLLM struct {
 	responses []api.Message
+	reasons   []string // optional per-response done_reason; default ""
 	calls     int
 }
 
-func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, error) {
+func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error) {
 	if f.calls >= len(f.responses) {
-		return nil, errors.New("fakeLLM exhausted")
+		return nil, "", errors.New("fakeLLM exhausted")
 	}
 	r := f.responses[f.calls]
+	reason := ""
+	if f.calls < len(f.reasons) {
+		reason = f.reasons[f.calls]
+	}
 	f.calls++
-	return &r, nil
+	return &r, reason, nil
 }
 
 type fakeMCP struct {
@@ -122,6 +127,42 @@ func TestRun_ToolErrorIsSerializedNotFatal(t *testing.T) {
 
 	if err := a.Run(context.Background(), "go"); err != nil {
 		t.Fatalf("want nil, got %v", err)
+	}
+}
+
+func TestRun_AbnormalDoneReasonAppendedToContent(t *testing.T) {
+	llm := &fakeLLM{
+		responses: []api.Message{{Role: "assistant", Content: "partial answer"}},
+		reasons:   []string{"length"},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llm, &fakeMCP{}, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 2 {
+		t.Fatalf("texts = %q, want [content, stopped-note]", disp.texts)
+	}
+	if disp.texts[0] != "partial answer" {
+		t.Errorf("texts[0] = %q", disp.texts[0])
+	}
+	if disp.texts[1] != "(model stopped: length)" {
+		t.Errorf("texts[1] = %q", disp.texts[1])
+	}
+}
+
+func TestRun_AbnormalDoneReasonWithEmptyContent(t *testing.T) {
+	llm := &fakeLLM{
+		responses: []api.Message{{Role: "assistant", Content: ""}},
+		reasons:   []string{"content_filter"},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llm, &fakeMCP{}, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 1 || disp.texts[0] != "(model returned no content — stopped: content_filter)" {
+		t.Errorf("texts = %q", disp.texts)
 	}
 }
 

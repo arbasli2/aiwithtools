@@ -280,7 +280,7 @@ type llmAdapter struct {
 	now        func() time.Time
 }
 
-func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, error) {
+func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error) {
 	built := llm.BuildSystemMessage(a.sessSystem, a.sessStart, a.now())
 	withSystem := make([]api.Message, 0, len(msgs)+1)
 	withSystem = append(withSystem, api.Message{Role: "system", Content: built})

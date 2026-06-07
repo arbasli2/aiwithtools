@@ -11,7 +11,10 @@ import (
 var ErrMaxIterations = errors.New("max iterations reached")
 
 type LLM interface {
-	Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, error)
+	// Chat returns the assistant message and the Ollama "done_reason"
+	// (e.g. "stop", "length", "content_filter"). The agent uses the
+	// reason to explain unexpectedly short or empty outputs.
+	Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error)
 }
 
 type MCP interface {
@@ -41,7 +44,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 	}
 
 	for i := 0; i < a.MaxIter; i++ {
-		resp, err := a.LLM.Chat(ctx, a.Model, a.Sess.Messages(), a.MCP.Tools())
+		resp, doneReason, err := a.LLM.Chat(ctx, a.Model, a.Sess.Messages(), a.MCP.Tools())
 		if err != nil {
 			return fmt.Errorf("chat: %w", err)
 		}
@@ -58,16 +61,20 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 		}
 
 		if len(resp.ToolCalls) == 0 {
-			// Turn ends here. If the model returned nothing visible at
-			// all, surface a placeholder rather than printing a blank
-			// line and re-prompting — otherwise the user can't tell
-			// whether the model errored, refused, or just thought.
-			if resp.Content == "" {
-				if resp.Thinking != "" {
-					a.Display.AssistantText("(thinking only — no final answer)\n" + resp.Thinking)
-				} else {
-					a.Display.AssistantText("(model returned no content)")
-				}
+			// Turn ends here. Make sure the user sees something, and
+			// surface non-"stop" finish reasons (length, content_filter,
+			// etc.) so unexpectedly short or empty outputs are explained
+			// rather than appearing as a silent re-prompt.
+			abnormal := doneReason != "" && doneReason != "stop"
+			switch {
+			case resp.Content != "" && abnormal:
+				a.Display.AssistantText(fmt.Sprintf("(model stopped: %s)", doneReason))
+			case resp.Content == "" && resp.Thinking != "":
+				a.Display.AssistantText("(thinking only — no final answer)\n" + resp.Thinking)
+			case resp.Content == "" && abnormal:
+				a.Display.AssistantText(fmt.Sprintf("(model returned no content — stopped: %s)", doneReason))
+			case resp.Content == "":
+				a.Display.AssistantText("(model returned no content)")
 			}
 			return nil
 		}
