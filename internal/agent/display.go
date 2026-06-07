@@ -5,11 +5,14 @@ package agent
 type Display interface {
 	ToolCallStart(name string, args map[string]any)
 	ToolCallEnd(name, output string, err error)
-	AssistantFinal(content string)
+	// AssistantText shows assistant-authored text. May be called more
+	// than once per turn (e.g. when the model writes commentary before
+	// emitting tool calls).
+	AssistantText(content string)
 }
 
 type NopDisplay struct{}
 
 func (NopDisplay) ToolCallStart(string, map[string]any) {}
 func (NopDisplay) ToolCallEnd(string, string, error)    {}
-func (NopDisplay) AssistantFinal(string)                {}
+func (NopDisplay) AssistantText(string)                 {}

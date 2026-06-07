@@ -29,6 +29,6 @@ func (t Terminal) ToolCallEnd(name, output string, err error) {
 	}
 }
 
-func (t Terminal) AssistantFinal(content string) {
+func (t Terminal) AssistantText(content string) {
 	fmt.Fprintln(t.Out, content)
 }

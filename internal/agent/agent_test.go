@@ -45,7 +45,7 @@ func (c *captureDisplay) ToolCallStart(n string, _ map[string]any) {
 	c.starts = append(c.starts, n)
 }
 func (c *captureDisplay) ToolCallEnd(n, _ string, _ error) { c.ends = append(c.ends, n) }
-func (c *captureDisplay) AssistantFinal(s string)          { c.finals = append(c.finals, s) }
+func (c *captureDisplay) AssistantText(s string)          { c.finals = append(c.finals, s) }
 
 type fakeSession struct {
 	msgs []api.Message

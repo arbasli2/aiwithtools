@@ -50,8 +50,25 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			return fmt.Errorf("append assistant: %w", err)
 		}
 
+		// Show any text the model wrote, even if it also wants to call
+		// tools — otherwise commentary like "Let me check the weather"
+		// disappears.
+		if resp.Content != "" {
+			a.Display.AssistantText(resp.Content)
+		}
+
 		if len(resp.ToolCalls) == 0 {
-			a.Display.AssistantFinal(resp.Content)
+			// Turn ends here. If the model returned nothing visible at
+			// all, surface a placeholder rather than printing a blank
+			// line and re-prompting — otherwise the user can't tell
+			// whether the model errored, refused, or just thought.
+			if resp.Content == "" {
+				if resp.Thinking != "" {
+					a.Display.AssistantText("(thinking only — no final answer)\n" + resp.Thinking)
+				} else {
+					a.Display.AssistantText("(model returned no content)")
+				}
+			}
 			return nil
 		}
 
