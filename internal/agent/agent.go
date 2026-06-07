@@ -69,6 +69,8 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			switch {
 			case resp.Content != "" && abnormal:
 				a.Display.AssistantText(fmt.Sprintf("(model stopped: %s)", doneReason))
+			case resp.Content == "" && resp.Thinking != "" && abnormal:
+				a.Display.AssistantText(fmt.Sprintf("(thinking only — no final answer, stopped: %s)\n%s", doneReason, resp.Thinking))
 			case resp.Content == "" && resp.Thinking != "":
 				a.Display.AssistantText("(thinking only — no final answer)\n" + resp.Thinking)
 			case resp.Content == "" && abnormal:

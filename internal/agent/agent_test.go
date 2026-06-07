@@ -151,6 +151,22 @@ func TestRun_AbnormalDoneReasonAppendedToContent(t *testing.T) {
 	}
 }
 
+func TestRun_AbnormalDoneReasonWithThinkingOnly(t *testing.T) {
+	llm := &fakeLLM{
+		responses: []api.Message{{Role: "assistant", Content: "", Thinking: "let me think"}},
+		reasons:   []string{"length"},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llm, &fakeMCP{}, &fakeSession{}, disp, 5)
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	want := "(thinking only — no final answer, stopped: length)\nlet me think"
+	if len(disp.texts) != 1 || disp.texts[0] != want {
+		t.Errorf("texts = %q, want [%q]", disp.texts, want)
+	}
+}
+
 func TestRun_AbnormalDoneReasonWithEmptyContent(t *testing.T) {
 	llm := &fakeLLM{
 		responses: []api.Message{{Role: "assistant", Content: ""}},

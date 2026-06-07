@@ -28,7 +28,7 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	msg, reason, err := c.Chat(context.Background(), "test",
+	msg, _, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "hi"}},
 		nil,
 	)
@@ -38,7 +38,6 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 	if msg.Role != "assistant" || msg.Content != "hello!" {
 		t.Errorf("msg = %+v", msg)
 	}
-	_ = reason
 }
 
 func TestChat_ReturnsDoneReason(t *testing.T) {
