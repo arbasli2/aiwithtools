@@ -57,26 +57,60 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 		return err
 	}
 
-	// System prompt
-	if systemFile == "" {
-		systemFile = filepath.Join(cfgDir, "system.md")
-	}
-	systemPrompt := ""
-	if b, err := os.ReadFile(systemFile); err == nil {
-		systemPrompt = strings.TrimSpace(string(b))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read system prompt: %w", err)
+	systemPrompt, err := readSystemPrompt(cfgDir, systemFile)
+	if err != nil {
+		return err
 	}
 
-	// Session store
 	store, err := session.Open(filepath.Join(dataD, "sessions.db"))
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 
-	// MCP host
+	sess, err := pickSession(store, model, cont, resume)
+	if err != nil {
+		return err
+	}
+	if sess == nil {
+		sess, err = store.Create(model, systemPrompt)
+		if err != nil {
+			return err
+		}
+	}
+	return runReplForSession(ctx, sess, maxIter, verbose)
+}
+
+// runRootResume implements `aiwithtools --continue` / `aiwithtools --resume`
+// at the root command level. The session's model is used for the agent;
+// no positional model argument is needed.
+func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose bool) error {
+	home, _ := os.UserHomeDir()
+	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
+	if err := os.MkdirAll(dataD, 0700); err != nil {
+		return err
+	}
+
+	store, err := session.Open(filepath.Join(dataD, "sessions.db"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	sess, err := pickGlobalSession(store, cont, resume)
+	if err != nil {
+		return err
+	}
+	return runReplForSession(ctx, sess, maxIter, verbose)
+}
+
+// runReplForSession is the shared core: set up MCP host, LLM client,
+// agent, and REPL given an already-resolved session.
+func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, verbose bool) error {
+	home, _ := os.UserHomeDir()
+	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
 	user := os.Getenv("USER")
+
 	mcfg, err := mcp.LoadConfig(filepath.Join(cfgDir, "mcp.json"), home, user)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -90,28 +124,12 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 	}
 	defer host.Close()
 
-	// LLM client (talks to local Ollama daemon).
-	// ClientFromEnvironment returns a default localhost client when
-	// OLLAMA_HOST is unset, so no extra fallback is needed.
 	ollamaClient, err := api.ClientFromEnvironment()
 	if err != nil {
 		return fmt.Errorf("ollama client: %w", err)
 	}
 	llmClient := llm.New(ollamaClient)
 
-	// Resolve / create the session
-	sess, err := pickSession(store, model, cont, resume)
-	if err != nil {
-		return err
-	}
-	if sess == nil {
-		sess, err = store.Create(model, systemPrompt)
-		if err != nil {
-			return err
-		}
-	}
-
-	// MCP tools → llm.Tool → api.Tools
 	var tools []llm.Tool
 	for _, t := range host.Tools() {
 		tools = append(tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
@@ -121,7 +139,6 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 		slog.Warn("skipping tool with invalid schema", "err", e)
 	}
 
-	// Adapters between internal packages and the agent's interfaces.
 	llmAdapter := &llmAdapter{c: llmClient, sessSystem: sess.System, sessStart: sess.CreatedAt, now: time.Now}
 	sessAdapter := &sessionAdapter{s: sess}
 	mcpAdapter := &mcpAdapter{h: host, tools: ollamaTools}
@@ -131,7 +148,7 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 		MCP:     mcpAdapter,
 		Sess:    sessAdapter,
 		Display: repl.Terminal{Out: os.Stdout, Verbose: verbose},
-		Model:   model,
+		Model:   sess.Model,
 		MaxIter: maxIter,
 	}
 
@@ -144,6 +161,20 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 		OnExit:  func() error { return nil },
 	}
 	return runner.Run(ctx)
+}
+
+func readSystemPrompt(cfgDir, systemFile string) (string, error) {
+	if systemFile == "" {
+		systemFile = filepath.Join(cfgDir, "system.md")
+	}
+	b, err := os.ReadFile(systemFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read system prompt: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 func pickSession(store *session.Store, model string, cont, resume bool) (*session.Session, error) {
@@ -180,6 +211,39 @@ func pickSession(store *session.Store, model string, cont, resume bool) (*sessio
 		return store.Load(items[n-1].ID)
 	}
 	return nil, nil
+}
+
+// pickGlobalSession resolves a session for the root-level --continue /
+// --resume flow. Unlike pickSession, it searches across all models.
+func pickGlobalSession(store *session.Store, cont, resume bool) (*session.Session, error) {
+	items, err := store.List("")
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no sessions to resume")
+	}
+	if cont {
+		it := items[0]
+		fmt.Printf("Resuming %s [%s] (%d msgs, last %s)\n",
+			it.ID[:8], it.Model, it.MessageCount, it.UpdatedAt.Format("2006-01-02 15:04"))
+		return store.Load(it.ID)
+	}
+	// resume: interactive picker
+	for i, it := range items {
+		fmt.Printf("%2d. %s  %-30s  msgs=%d  last=%s  %q\n",
+			i+1, it.ID[:8], it.Model, it.MessageCount,
+			it.UpdatedAt.Format(time.RFC3339), truncate(it.FirstUserMessage, 50))
+	}
+	fmt.Print("pick a number: ")
+	var n int
+	if _, err := fmt.Scanln(&n); err != nil {
+		return nil, err
+	}
+	if n < 1 || n > len(items) {
+		return nil, fmt.Errorf("invalid selection")
+	}
+	return store.Load(items[n-1].ID)
 }
 
 func truncate(s string, n int) string {

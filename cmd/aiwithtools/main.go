@@ -11,10 +11,37 @@ import (
 )
 
 func main() {
+	var (
+		rootCont    bool
+		rootResume  bool
+		rootMaxIter int
+		rootVerbose bool
+	)
 	root := &cobra.Command{
 		Use:   "aiwithtools",
 		Short: "Ollama-backed CLI with MCP tools and ReAct agent loop",
+		Long: `aiwithtools wraps Ollama with MCP-based tool calling and a ReAct agent loop.
+
+Common forms:
+  aiwithtools run <model>           # new session
+  aiwithtools --continue            # resume the most recent session (any model)
+  aiwithtools --resume              # pick a session to resume (any model)
+  aiwithtools sessions              # list sessions`,
+		Args:         cobra.NoArgs,
+		SilenceUsage: true, // don't print usage on RunE errors
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !rootCont && !rootResume {
+				return cmd.Help()
+			}
+			return runRootResume(cmd.Context(), rootCont, rootResume, rootMaxIter, rootVerbose)
+		},
 	}
+	root.Flags().BoolVar(&rootCont, "continue", false, "resume the most recent session (any model)")
+	root.Flags().BoolVar(&rootResume, "resume", false, "pick a session to resume (any model)")
+	root.Flags().IntVar(&rootMaxIter, "max-iterations", 25, "maximum ReAct iterations per turn")
+	root.Flags().BoolVar(&rootVerbose, "verbose", false, "print full tool outputs in the REPL")
+	root.MarkFlagsMutuallyExclusive("continue", "resume")
+
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newSessionsCmd())
 
