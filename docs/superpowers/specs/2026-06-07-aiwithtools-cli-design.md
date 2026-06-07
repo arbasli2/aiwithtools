@@ -33,6 +33,7 @@ aiwithtools run <model> --system FILE    # override system prompt for this sessi
 aiwithtools run <model> --max-iterations N   # default 25
 
 aiwithtools sessions                     # list all sessions (id, model, last-used, msg count, first user msg preview)
+aiwithtools sessions --model <model>     # filter list to one model
 aiwithtools sessions rm <id>             # delete one
 aiwithtools sessions rm --all            # delete all
 ```
@@ -72,6 +73,9 @@ Package boundaries:
 ## ReAct loop
 
 ```go
+// Every Append* call inside this function is a single transaction that
+// inserts the message AND bumps sessions.updated_at = now. The session
+// package owns that invariant; the agent just calls Append*.
 func (a *Agent) Run(ctx context.Context, userInput string) error {
     a.sess.AppendUser(userInput)
     for i := 0; i < a.maxIter; i++ {
@@ -113,17 +117,18 @@ Config path: `~/.config/aiwithtools/mcp.json`, same schema as Claude Code / Clau
 Lifecycle:
 
 1. Read and parse config at startup.
-2. For each server, spawn via mcp-go stdio transport with the configured `command`/`args`/`env`. Per-server failures log a warning and continue (other servers still load).
-3. After spawn, call `tools/list` per server. Build the tool registry with `server__rawname` keys. Cache `inputSchema` as `json.RawMessage` and pass through unchanged when building the Ollama `tools` array (both are JSON Schema).
-4. `Tools()` returns an `[]api.Tool` snapshot.
-5. `Call(ctx, prefixedName, args)` routes to the right client's `CallTool`, flattens the response content blocks to a single string.
-6. Shutdown: REPL exit or signal triggers `Close()` on every client (terminates child processes). Wired in `main`'s defer.
+2. For each server, spawn via mcp-go stdio transport with the configured `command`/`args`/`env`. `command` and any path-shaped `args` may contain `~` and `$HOME`/`$USER` references; the host expands these before exec'ing (other env-var expansion is not performed — keeps behavior predictable). Relative paths in `command` resolve against `$PATH` per the normal exec rules. Per-server failures log a warning and continue (other servers still load).
+3. Complete the MCP `initialize` handshake on each spawned server, then call `tools/list`. Build the tool registry with `server__rawname` keys. Cache `inputSchema` as `json.RawMessage` and pass through unchanged when building the Ollama `tools` array (both are JSON Schema).
+4. Each server has a **15-second startup budget** covering spawn + initialize + tools/list. If a server doesn't complete the handshake in that window, treat it as a spawn failure (log warning, skip). This prevents a broken server from blocking the REPL forever.
+5. `Tools()` returns an `[]api.Tool` snapshot.
+6. `Call(ctx, prefixedName, args)` routes to the right client's `CallTool`, flattens the response content blocks to a single string.
+7. Shutdown: REPL exit or signal triggers `Close()` on every client (terminates child processes). Wired in `main`'s defer.
 
 Name collisions across servers are resolved by the `server__` prefix. No raw tool names are exposed.
 
 ## Session storage
 
-SQLite at `~/.local/share/aiwithtools/sessions.db`. Directory created mode 0700.
+SQLite at `~/.local/share/aiwithtools/sessions.db`. Directory created mode 0700, DB file created mode 0600 (chat content may be sensitive — keep it user-only).
 
 ```sql
 CREATE TABLE sessions (
@@ -157,7 +162,7 @@ Behaviors:
 - `--resume`: list this model's sessions ordered by `updated_at DESC` showing id, last-used, msg count, and first-user-message preview; prompt for selection by number.
 - `/clear`: `DELETE FROM messages WHERE session_id = ?`. Session row stays so `--continue` still finds it.
 - `sessions rm <id>`: cascade delete via FK.
-- Dangling tool_calls on resume (last assistant message had `tool_calls` but no following `tool` messages): print a warning, drop those tool_calls from the loaded history, treat session as if the last user message is awaiting response.
+- Dangling tool_calls on resume: if the last assistant message in the session has `tool_calls` and fewer following `tool`-role messages than there are calls (zero or partial), print a warning and discard the assistant message AND any partial tool responses. The session resumes as if the prior turn had just received its user message and never been answered, so the next request re-runs the LLM cleanly with no half-answered tool calls in context.
 
 ## System prompt and date injection
 
@@ -186,7 +191,8 @@ Documented limitation: a single same-day session that crosses midnight mid-turn 
 | Failure | Behavior |
 |---|---|
 | Ollama daemon unreachable | Fatal at startup. Print actionable error referencing `ollama serve`. |
-| Model not pulled / not found | Surface Ollama error verbatim. No auto-pull. |
+| Model not pulled / not found (local) | Surface Ollama error verbatim. No auto-pull. |
+| Cloud model auth missing/expired (`:cloud` suffix → 401 from daemon) | Fatal at startup. Print `aiwithtools: cloud model "<name>" requires authentication — run \`ollama signin\` and retry.` We don't manage cloud credentials; the daemon does. |
 | MCP server fails to spawn | Warn, continue. Other servers still load. |
 | MCP tool call fails | Serialize error as `tool`-role message content. Loop continues. |
 | Ctrl-C mid-turn | Cancel in-flight call. Persist what completed. Drop dangling tool_calls on next resume. Return to prompt. |
@@ -216,12 +222,12 @@ Principle: boundary errors are fatal; in-loop errors are recoverable via the mod
 
 **Integration:**
 
-- Spawn the bundled `text-saver.py` MCP server (already at `~/src/mcp-servers/text-saver.py`), list tools, call one, verify response. Exercises MCP transport end-to-end without depending on a model.
-- Open temp SQLite, write a session, run `--continue` lookup, verify message replay.
+- A minimal MCP server written in Go and checked into `internal/mcp/testdata/fakeserver/` is built at test time and spawned over stdio. The test exercises `initialize` → `tools/list` → `CallTool` end-to-end. No dependency on Python, `uv`, or files outside the repo — runs cleanly on CI and any contributor's machine.
+- Open temp SQLite, write a session, run `--continue` lookup, verify message replay. Also covers the dangling-tool-calls recovery path by inserting a session with an assistant message whose `tool_calls` are partially answered, then asserting the loader drops the right messages.
 
 **Manual smoke (documented in README, not in CI):**
 
-`aiwithtools run nemotron-3-nano:30b-cloud` (the default smoke-test model — `:cloud` and free). Ask: "save the text 'hello' using the text-saver tool, then tell me what you did." Verify the model calls `text-saver__save_text`, sees the result, and produces a final answer. This is the v1 acceptance test for the full ReAct loop against a real model.
+`aiwithtools run nemotron-3-nano:30b-cloud` (the default smoke-test model — `:cloud` and free; requires `ollama signin` first). Ask: "save the text 'hello' using the text-saver tool, then tell me what you did." Assumes the user's MCP config includes `text-saver` (see `etc/example/mcp.json`). Verify the model calls `text-saver__save_text`, sees the result, and produces a final answer. This is the v1 acceptance test for the full ReAct loop against a real model.
 
 CI does not run Ollama; the manual smoke is the only model-in-the-loop check.
 
