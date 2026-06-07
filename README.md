@@ -37,10 +37,16 @@ Optional: `~/.config/aiwithtools/system.md` with your default system prompt.
 # new session
 aiwithtools run nemotron-3-nano:30b-cloud
 
-# resume the most recent session for this model
+# resume the most recent session across all models
+aiwithtools --continue
+
+# pick a session across all models
+aiwithtools --resume
+
+# resume the most recent session for ONE specific model
 aiwithtools run nemotron-3-nano:30b-cloud --continue
 
-# pick a session interactively
+# pick a session for ONE specific model
 aiwithtools run nemotron-3-nano:30b-cloud --resume
 
 # list / delete sessions

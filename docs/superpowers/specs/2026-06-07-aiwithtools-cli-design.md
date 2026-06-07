@@ -32,11 +32,16 @@ aiwithtools run <model> --resume         # interactive picker among that model's
 aiwithtools run <model> --system FILE    # override system prompt for this session
 aiwithtools run <model> --max-iterations N   # default 25
 
+aiwithtools --continue                   # resume the most recent session globally (any model)
+aiwithtools --resume                     # interactive picker across all sessions (any model)
+
 aiwithtools sessions                     # list all sessions (id, model, last-used, msg count, first user msg preview)
 aiwithtools sessions --model <model>     # filter list to one model
 aiwithtools sessions rm <id>             # delete one
 aiwithtools sessions rm --all            # delete all
 ```
+
+The root-level `--continue` / `--resume` derive the model from the loaded session (no positional `<model>` argument). They share all post-resolution wiring with `run <model> --continue/--resume`.
 
 `<model>` is whatever the local Ollama daemon accepts, including `:cloud` suffixed cloud models (e.g. `nemotron-3-nano:30b-cloud`, used as the default smoke-test model because it's free).
 

@@ -113,14 +113,14 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 
 	mcfg, err := mcp.LoadConfig(filepath.Join(cfgDir, "mcp.json"), home, user)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return fmt.Errorf("mcp config: %w", err)
 	}
 	if mcfg == nil {
 		mcfg = &mcp.Config{}
 	}
 	host, err := mcp.OpenHost(ctx, mcfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("mcp host: %w", err)
 	}
 	defer host.Close()
 
@@ -225,9 +225,13 @@ func pickGlobalSession(store *session.Store, cont, resume bool) (*session.Sessio
 	}
 	if cont {
 		it := items[0]
+		sess, err := store.Load(it.ID)
+		if err != nil {
+			return nil, err
+		}
 		fmt.Printf("Resuming %s [%s] (%d msgs, last %s)\n",
 			it.ID[:8], it.Model, it.MessageCount, it.UpdatedAt.Format("2006-01-02 15:04"))
-		return store.Load(it.ID)
+		return sess, nil
 	}
 	// resume: interactive picker
 	for i, it := range items {
