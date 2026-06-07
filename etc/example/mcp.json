@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "tavily-remote": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-dev-PLACEHOLDER_REPLACE_WITH_YOUR_KEY"
+      ]
+    },
+    "pymupdf4llm-mcp": {
+      "command": "uvx",
+      "args": [
+        "pymupdf4llm-mcp@latest",
+        "stdio"
+      ],
+      "env": {}
+    },
+    "pdf-downloader": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/Users/amir/src/mcp-servers/pdf-downloader-mcp/pdf-downloader-mcp.py"
+      ],
+      "env": {}
+    },
+    "time-space": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/Users/amir/src/mcp-servers/time-space-awareness.py"
+      ],
+      "env": {}
+    },
+    "weather": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/Users/amir/src/mcp-servers/weather.py"
+      ],
+      "env": {}
+    },
+    "text-saver": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/Users/amir/src/mcp-servers/text-saver.py"
+      ]
+    }
+  }
+}
