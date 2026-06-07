@@ -6,25 +6,35 @@ import (
 	"testing"
 
 	"github.com/ollama/ollama/api"
+
+	"aiwithtools/internal/llm"
 )
 
 type fakeLLM struct {
-	responses []api.Message
-	reasons   []string // optional per-response done_reason; default ""
-	calls     int
+	responses    []api.Message
+	reasons      []string // optional per-response done_reason; default ""
+	promptTokens []int    // optional per-response prompt-token counts
+	evalTokens   []int    // optional per-response eval-token counts
+	calls        int
 }
 
-func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error) {
+func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*llm.ChatResult, error) {
 	if f.calls >= len(f.responses) {
-		return nil, "", errors.New("fakeLLM exhausted")
+		return nil, errors.New("fakeLLM exhausted")
 	}
 	r := f.responses[f.calls]
-	reason := ""
+	out := &llm.ChatResult{Message: &r}
 	if f.calls < len(f.reasons) {
-		reason = f.reasons[f.calls]
+		out.DoneReason = f.reasons[f.calls]
+	}
+	if f.calls < len(f.promptTokens) {
+		out.PromptTokens = f.promptTokens[f.calls]
+	}
+	if f.calls < len(f.evalTokens) {
+		out.EvalTokens = f.evalTokens[f.calls]
 	}
 	f.calls++
-	return &r, reason, nil
+	return out, nil
 }
 
 type fakeMCP struct {
@@ -223,6 +233,63 @@ func TestRun_CommentaryAlongsideToolCallShowsBoth(t *testing.T) {
 	}
 	if len(disp.texts) != 2 || disp.texts[0] != "Let me check." || disp.texts[1] != "Done." {
 		t.Errorf("texts = %q, want [\"Let me check.\", \"Done.\"]", disp.texts)
+	}
+}
+
+func TestRun_ContextWarningAboveThreshold(t *testing.T) {
+	llmFake := &fakeLLM{
+		responses:    []api.Message{{Role: "assistant", Content: "hi"}},
+		promptTokens: []int{8400},
+		evalTokens:   []int{200},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, &fakeMCP{}, &fakeSession{}, disp, 5)
+	a.ContextLength = 10000
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 2 {
+		t.Fatalf("texts = %q, want [content, warning]", disp.texts)
+	}
+	if disp.texts[0] != "hi" {
+		t.Errorf("texts[0] = %q", disp.texts[0])
+	}
+	want := "(context 86%: 8.6K / 10K — Ollama will start dropping oldest messages above 100%)"
+	if disp.texts[1] != want {
+		t.Errorf("texts[1] = %q, want %q", disp.texts[1], want)
+	}
+}
+
+func TestRun_NoContextWarningBelowThreshold(t *testing.T) {
+	llmFake := &fakeLLM{
+		responses:    []api.Message{{Role: "assistant", Content: "hi"}},
+		promptTokens: []int{500},
+		evalTokens:   []int{50},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, &fakeMCP{}, &fakeSession{}, disp, 5)
+	a.ContextLength = 10000
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 1 {
+		t.Errorf("texts = %q, want only content", disp.texts)
+	}
+}
+
+func TestRun_NoContextWarningWhenLengthUnknown(t *testing.T) {
+	llmFake := &fakeLLM{
+		responses:    []api.Message{{Role: "assistant", Content: "hi"}},
+		promptTokens: []int{99999},
+	}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, &fakeMCP{}, &fakeSession{}, disp, 5)
+	a.ContextLength = 0 // unknown
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.texts) != 1 {
+		t.Errorf("texts = %q, want only content (no warning when ctx unknown)", disp.texts)
 	}
 }
 

@@ -58,10 +58,17 @@ aiwithtools sessions rm --all
 
 In the REPL:
 
-- `/clear` — drop messages from this session (session row stays)
+- `/info` — show model, context window, session id, message count, last-turn tokens
 - `/tools` — list connected MCP servers and their tools
+- `/clear` — drop messages from this session (session row stays)
 - `/exit` or `/bye` — quit
 - `/help` — list commands
+
+When a turn ends with context usage above 80%, a notice is shown like
+`(context 86%: 28K / 32K — Ollama will start dropping oldest messages above 100%)`.
+Ollama auto-truncates oldest messages once the window overflows
+(`truncate=true` by default) so the conversation keeps working — but
+older context is silently dropped.
 
 ## Smoke test
 

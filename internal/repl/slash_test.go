@@ -9,6 +9,7 @@ func TestParseSlash_KnownCommands(t *testing.T) {
 		"/bye":   SlashExit,
 		"/tools": SlashTools,
 		"/help":  SlashHelp,
+		"/info":  SlashInfo,
 	}
 	for in, want := range cases {
 		if got, ok := ParseSlash(in); !ok || got != want {

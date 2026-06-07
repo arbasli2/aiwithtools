@@ -28,40 +28,46 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	msg, _, err := c.Chat(context.Background(), "test",
+	res, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "hi"}},
 		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msg.Role != "assistant" || msg.Content != "hello!" {
-		t.Errorf("msg = %+v", msg)
+	if res.Message.Role != "assistant" || res.Message.Content != "hello!" {
+		t.Errorf("msg = %+v", res.Message)
 	}
 }
 
-func TestChat_ReturnsDoneReason(t *testing.T) {
+func TestChat_ReturnsDoneReasonAndTokenCounts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		_ = json.NewEncoder(w).Encode(api.ChatResponse{
+		resp := api.ChatResponse{
 			Model:      "test",
 			Message:    api.Message{Role: "assistant", Content: "truncated..."},
 			Done:       true,
 			DoneReason: "length",
-		})
+		}
+		resp.PromptEvalCount = 1024
+		resp.EvalCount = 256
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	_, reason, err := c.Chat(context.Background(), "test",
+	res, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reason != "length" {
-		t.Errorf("reason = %q, want length", reason)
+	if res.DoneReason != "length" {
+		t.Errorf("reason = %q, want length", res.DoneReason)
+	}
+	if res.PromptTokens != 1024 || res.EvalTokens != 256 {
+		t.Errorf("tokens = (%d, %d), want (1024, 256)", res.PromptTokens, res.EvalTokens)
 	}
 }
 
@@ -86,17 +92,17 @@ func TestChat_SurfacesToolCalls(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	c := New(api.NewClient(u, http.DefaultClient))
 
-	msg, _, err := c.Chat(context.Background(), "test",
+	res, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "weather?"}},
 		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.ToolCalls) != 1 {
-		t.Fatalf("ToolCalls len = %d", len(msg.ToolCalls))
+	if len(res.Message.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls len = %d", len(res.Message.ToolCalls))
 	}
-	if msg.ToolCalls[0].Function.Name != "weather__forecast" {
-		t.Errorf("name = %q", msg.ToolCalls[0].Function.Name)
+	if res.Message.ToolCalls[0].Function.Name != "weather__forecast" {
+		t.Errorf("name = %q", res.Message.ToolCalls[0].Function.Name)
 	}
 }

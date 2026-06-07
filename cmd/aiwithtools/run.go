@@ -139,18 +139,35 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 		slog.Warn("skipping tool with invalid schema", "err", e)
 	}
 
+	// Best-effort context-window probe. Cloud models may not return
+	// model_info; we treat ctxLen=0 as "unknown" and just don't surface
+	// the warning or "/info" context line in that case.
+	ctxLen, ctxErr := llmClient.ContextLength(ctx, sess.Model)
+	if ctxErr != nil {
+		slog.Warn("could not determine context length", "model", sess.Model, "err", ctxErr)
+	}
+
 	llmAdapter := &llmAdapter{c: llmClient, sessSystem: sess.System, sessStart: sess.CreatedAt, now: time.Now}
 	sessAdapter := &sessionAdapter{s: sess}
 	mcpAdapter := &mcpAdapter{h: host, tools: ollamaTools}
 
 	a := &agent.Agent{
-		LLM:     llmAdapter,
-		MCP:     mcpAdapter,
-		Sess:    sessAdapter,
-		Display: repl.Terminal{Out: os.Stdout, Verbose: verbose},
-		Model:   sess.Model,
-		MaxIter: maxIter,
+		LLM:           llmAdapter,
+		MCP:           mcpAdapter,
+		Sess:          sessAdapter,
+		Display:       repl.Terminal{Out: os.Stdout, Verbose: verbose},
+		Model:         sess.Model,
+		MaxIter:       maxIter,
+		ContextLength: ctxLen,
 	}
+
+	// Startup banner: model + context window, before the first prompt.
+	if ctxLen > 0 {
+		fmt.Printf("Model: %s (%s ctx)\n", sess.Model, llm.FormatTokens(ctxLen))
+	} else {
+		fmt.Printf("Model: %s (context size unknown)\n", sess.Model)
+	}
+	fmt.Println("Type /help for commands.")
 
 	runner := &repl.Runner{
 		Prompt:  ">>> ",
@@ -158,9 +175,38 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 		OnUser:  func(ctx context.Context, line string) error { return a.Run(ctx, line) },
 		OnClear: func() error { return sess.Clear() },
 		OnTools: func() string { return formatTools(host.Tools()) },
+		OnInfo:  func() string { return formatInfo(sess, a, ctxLen) },
 		OnExit:  func() error { return nil },
 	}
 	return runner.Run(ctx)
+}
+
+// formatInfo renders the /info report.
+func formatInfo(sess *session.Session, a *agent.Agent, ctxLen int) string {
+	msgs, _ := sess.Messages()
+	var b strings.Builder
+	fmt.Fprintf(&b, "Session:  %s\n", sess.ID)
+	fmt.Fprintf(&b, "Model:    %s\n", sess.Model)
+	if ctxLen > 0 {
+		used := a.LastPromptTokens + a.LastEvalTokens
+		if used > 0 {
+			pct := used * 100 / ctxLen
+			fmt.Fprintf(&b, "Context:  %s / %s tokens (%d%%)\n",
+				llm.FormatTokens(used), llm.FormatTokens(ctxLen), pct)
+		} else {
+			fmt.Fprintf(&b, "Context:  %s tokens max (no turn yet — usage unknown)\n", llm.FormatTokens(ctxLen))
+		}
+	} else {
+		fmt.Fprintln(&b, "Context:  size unknown (cloud model or older Ollama)")
+	}
+	fmt.Fprintf(&b, "Messages: %d\n", len(msgs))
+	if a.LastPromptTokens > 0 || a.LastEvalTokens > 0 {
+		fmt.Fprintf(&b, "Last turn: %d prompt + %d reply tokens",
+			a.LastPromptTokens, a.LastEvalTokens)
+	} else {
+		fmt.Fprint(&b, "Last turn: (none yet)")
+	}
+	return b.String()
 }
 
 func readSystemPrompt(cfgDir, systemFile string) (string, error) {
@@ -280,7 +326,7 @@ type llmAdapter struct {
 	now        func() time.Time
 }
 
-func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error) {
+func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*llm.ChatResult, error) {
 	built := llm.BuildSystemMessage(a.sessSystem, a.sessStart, a.now())
 	withSystem := make([]api.Message, 0, len(msgs)+1)
 	withSystem = append(withSystem, api.Message{Role: "system", Content: built})

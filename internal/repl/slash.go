@@ -10,6 +10,7 @@ const (
 	SlashExit
 	SlashTools
 	SlashHelp
+	SlashInfo
 )
 
 func ParseSlash(input string) (SlashCommand, bool) {
@@ -26,12 +27,15 @@ func ParseSlash(input string) (SlashCommand, bool) {
 		return SlashTools, true
 	case "/help":
 		return SlashHelp, true
+	case "/info":
+		return SlashInfo, true
 	}
 	return SlashUnknown, false
 }
 
 const HelpText = `Slash commands:
-  /clear   drop all messages from this session (session stays, --continue still finds it)
+  /info    show model, context window, session, and last-turn tokens
   /tools   list connected MCP servers and their tools
+  /clear   drop all messages from this session (session stays, --continue still finds it)
   /exit    quit (also /bye)
   /help    show this message`

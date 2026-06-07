@@ -6,15 +6,18 @@ import (
 	"fmt"
 
 	"github.com/ollama/ollama/api"
+
+	"aiwithtools/internal/llm"
 )
 
 var ErrMaxIterations = errors.New("max iterations reached")
 
 type LLM interface {
-	// Chat returns the assistant message and the Ollama "done_reason"
-	// (e.g. "stop", "length", "content_filter"). The agent uses the
-	// reason to explain unexpectedly short or empty outputs.
-	Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*api.Message, string, error)
+	// Chat returns the assistant message, Ollama's done_reason, and
+	// per-turn token counts. The agent uses the reason to explain
+	// unexpectedly short or empty outputs, and the token counts to
+	// warn the user when nearing the model's context window.
+	Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*llm.ChatResult, error)
 }
 
 type MCP interface {
@@ -36,6 +39,18 @@ type Agent struct {
 	Display Display
 	Model   string
 	MaxIter int
+
+	// ContextLength is the model's maximum context window in tokens.
+	// Zero means unknown — no warning will be shown.
+	ContextLength int
+	// WarnAtPercent is the threshold above which a context-usage
+	// warning is shown after a turn. Zero defaults to 80.
+	WarnAtPercent int
+
+	// LastPromptTokens / LastEvalTokens hold the most recent Chat's
+	// token counts so /info can report them without re-querying.
+	LastPromptTokens int
+	LastEvalTokens   int
 }
 
 func (a *Agent) Run(ctx context.Context, userInput string) error {
@@ -44,10 +59,14 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 	}
 
 	for i := 0; i < a.MaxIter; i++ {
-		resp, doneReason, err := a.LLM.Chat(ctx, a.Model, a.Sess.Messages(), a.MCP.Tools())
+		result, err := a.LLM.Chat(ctx, a.Model, a.Sess.Messages(), a.MCP.Tools())
 		if err != nil {
 			return fmt.Errorf("chat: %w", err)
 		}
+		resp := result.Message
+		doneReason := result.DoneReason
+		a.LastPromptTokens = result.PromptTokens
+		a.LastEvalTokens = result.EvalTokens
 
 		if err := a.Sess.AppendAssistant(resp.Content, resp.ToolCalls); err != nil {
 			return fmt.Errorf("append assistant: %w", err)
@@ -78,6 +97,7 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 			case resp.Content == "":
 				a.Display.AssistantText("(model returned no content)")
 			}
+			a.warnIfContextHigh()
 			return nil
 		}
 
@@ -104,4 +124,30 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 		}
 	}
 	return fmt.Errorf("%w (limit=%d)", ErrMaxIterations, a.MaxIter)
+}
+
+// warnIfContextHigh shows a context-usage notice when the most recent
+// turn's used tokens (prompt + reply) exceed WarnAtPercent of the
+// model's context window. Called once per turn that ends without tool
+// calls. Silently does nothing if ContextLength is unknown.
+func (a *Agent) warnIfContextHigh() {
+	if a.ContextLength <= 0 {
+		return
+	}
+	used := a.LastPromptTokens + a.LastEvalTokens
+	if used <= 0 {
+		return
+	}
+	threshold := a.WarnAtPercent
+	if threshold <= 0 {
+		threshold = 80
+	}
+	pct := used * 100 / a.ContextLength
+	if pct < threshold {
+		return
+	}
+	a.Display.AssistantText(fmt.Sprintf(
+		"(context %d%%: %s / %s — Ollama will start dropping oldest messages above 100%%)",
+		pct, llm.FormatTokens(used), llm.FormatTokens(a.ContextLength),
+	))
 }

@@ -17,6 +17,7 @@ type Runner struct {
 	OnUser  func(ctx context.Context, line string) error
 	OnClear func() error
 	OnTools func() string
+	OnInfo  func() string
 	OnExit  func() error
 }
 
@@ -61,6 +62,8 @@ func (r *Runner) Run(ctx context.Context) error {
 				return r.OnExit()
 			case SlashTools:
 				fmt.Fprintln(r.Out, r.OnTools())
+			case SlashInfo:
+				fmt.Fprintln(r.Out, r.OnInfo())
 			case SlashHelp:
 				fmt.Fprintln(r.Out, HelpText)
 			}
