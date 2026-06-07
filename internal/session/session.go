@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -117,6 +118,79 @@ func (s *Session) AppendAssistant(content string, toolCalls []ToolCall) error {
 
 func (s *Session) AppendTool(toolName, content string) error {
 	return s.appendRaw("tool", content, toolName, nil)
+}
+
+func (s *Store) Load(id string) (*Session, error) {
+	var sess Session
+	var createdAt, updatedAt int64
+	err := s.db.QueryRow(
+		`SELECT id, model, system, created_at, updated_at FROM sessions WHERE id = ?`, id,
+	).Scan(&sess.ID, &sess.Model, &sess.System, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("session %q not found", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sess.CreatedAt = time.Unix(0, createdAt)
+	sess.UpdatedAt = time.Unix(0, updatedAt)
+	sess.store = s
+
+	if err := sess.repairDanglingToolCalls(); err != nil {
+		return nil, fmt.Errorf("recovery: %w", err)
+	}
+	return &sess, nil
+}
+
+// repairDanglingToolCalls deletes the last assistant message + any
+// following tool messages if the assistant emitted more tool_calls
+// than were answered. Logs a warning to stderr when this happens.
+func (s *Session) repairDanglingToolCalls() error {
+	msgs, err := s.Messages()
+	if err != nil {
+		return err
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	lastAssistant := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" {
+			lastAssistant = i
+			break
+		}
+	}
+	if lastAssistant == -1 {
+		return nil
+	}
+	asst := msgs[lastAssistant]
+	if len(asst.ToolCalls) == 0 {
+		return nil
+	}
+
+	following := 0
+	for _, m := range msgs[lastAssistant+1:] {
+		if m.Role == "tool" {
+			following++
+		}
+	}
+	if following >= len(asst.ToolCalls) {
+		return nil
+	}
+
+	slog.Warn("dropping dangling tool_calls on resume",
+		"session", s.ID,
+		"expected", len(asst.ToolCalls),
+		"got", following,
+	)
+	_, err = s.store.db.Exec(
+		`DELETE FROM messages
+         WHERE session_id = ?
+         AND seq >= (SELECT seq FROM messages WHERE session_id = ? AND role = 'assistant' ORDER BY seq DESC LIMIT 1)`,
+		s.ID, s.ID,
+	)
+	return err
 }
 
 func (s *Session) Messages() ([]Message, error) {
