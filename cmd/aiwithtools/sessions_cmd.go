@@ -27,6 +27,9 @@ func newSessionsCmd() *cobra.Command {
 		Short: "Delete a session (or all with --all)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			all, _ := cmd.Flags().GetBool("all")
+			if all && len(args) > 0 {
+				return fmt.Errorf("--all cannot be combined with positional <id> arguments")
+			}
 			if all {
 				return sessionsRmAll()
 			}

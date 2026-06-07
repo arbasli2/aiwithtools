@@ -184,10 +184,11 @@ func pickSession(store *session.Store, model string, cont, resume bool) (*sessio
 
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }
 
 func formatTools(tools []mcp.HostTool) string {

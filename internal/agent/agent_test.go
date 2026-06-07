@@ -125,6 +125,34 @@ func TestRun_ToolErrorIsSerializedNotFatal(t *testing.T) {
 	}
 }
 
+func TestRun_NilArgsNormalizedToEmptyMap(t *testing.T) {
+	// Tool call with NO arguments (zero-value ToolCallFunctionArguments).
+	tc := api.ToolCall{Function: api.ToolCallFunction{Name: "echo"}}
+	llm := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", ToolCalls: []api.ToolCall{tc}},
+		{Role: "assistant", Content: "done"},
+	}}
+	captured := &argCapturingMCP{out: map[string]string{"echo": "ok"}}
+	a := newAgent(llm, captured, &fakeSession{}, &captureDisplay{}, 5)
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if captured.lastArgs == nil {
+		t.Error("MCP.Call received nil args; agent should normalize to empty map")
+	}
+}
+
+type argCapturingMCP struct {
+	out      map[string]string
+	lastArgs map[string]any
+}
+
+func (f *argCapturingMCP) Tools() api.Tools { return nil }
+func (f *argCapturingMCP) Call(ctx context.Context, name string, args map[string]any) (string, error) {
+	f.lastArgs = args
+	return f.out[name], nil
+}
+
 func TestRun_MaxIterReachedErrors(t *testing.T) {
 	looping := api.Message{Role: "assistant", ToolCalls: []api.ToolCall{toolCallWith("echo", map[string]any{})}}
 	llm := &fakeLLM{responses: []api.Message{looping, looping, looping}}

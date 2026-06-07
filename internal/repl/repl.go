@@ -76,6 +76,13 @@ func (r *Runner) Run(ctx context.Context) error {
 // runTurn calls OnUser with a context that SIGINT cancels for the
 // duration of the call. After OnUser returns we uninstall the handler
 // so the next prompt's Ctrl-C goes back to chzyer/readline.
+//
+// Caveat: a SIGINT that arrives in the brief window after signal.Stop
+// runs and before readline.Readline re-installs its own handler will
+// hit Go's default handler and terminate the process. The window is
+// short enough in practice that it's not worth the complexity of a
+// fully race-free hand-off; if it becomes an issue, install a
+// persistent handler in main and gate behavior on a "in-turn" flag.
 func (r *Runner) runTurn(parent context.Context, line string) error {
 	turnCtx, cancel := context.WithCancel(parent)
 	defer cancel()

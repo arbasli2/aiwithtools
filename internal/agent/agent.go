@@ -57,6 +57,12 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 
 		for _, tc := range resp.ToolCalls {
 			args := tc.Function.Arguments.ToMap()
+			if args == nil {
+				// Some MCP servers reject JSON `null` for arguments and
+				// expect at least `{}`. Normalize so empty-args tool
+				// calls work regardless of server strictness.
+				args = map[string]any{}
+			}
 			a.Display.ToolCallStart(tc.Function.Name, args)
 
 			out, callErr := a.MCP.Call(ctx, tc.Function.Name, args)
