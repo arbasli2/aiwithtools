@@ -20,7 +20,9 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create db file: %w", err)
 	}
-	f.Close()
+	// We didn't write anything; ignore close error explicitly. The blank
+	// assignment also satisfies CodeQL's go/unhandled-writable-file-close.
+	_ = f.Close()
 	if err := os.Chmod(path, 0600); err != nil {
 		return nil, fmt.Errorf("chmod db file: %w", err)
 	}
