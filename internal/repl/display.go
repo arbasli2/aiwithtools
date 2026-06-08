@@ -14,18 +14,18 @@ type Terminal struct {
 
 func (t Terminal) ToolCallStart(name string, args map[string]any) {
 	b, _ := json.Marshal(args)
-	fmt.Fprintf(t.Out, "\x1b[2m→ %s(%s)\x1b[0m\n", name, string(b))
+	fmt.Fprintln(t.Out, cDim(fmt.Sprintf("→ %s(%s)", name, string(b))))
 }
 
 func (t Terminal) ToolCallEnd(name, output string, err error) {
 	if err != nil {
-		fmt.Fprintf(t.Out, "\x1b[31m← %s ERROR: %s\x1b[0m\n", name, err)
+		fmt.Fprintln(t.Out, cRed(fmt.Sprintf("← %s ERROR: %s", name, err)))
 		return
 	}
 	if t.Verbose {
-		fmt.Fprintf(t.Out, "\x1b[2m← %s:\n%s\x1b[0m\n", name, output)
+		fmt.Fprintln(t.Out, cDim(fmt.Sprintf("← %s:\n%s", name, output)))
 	} else {
-		fmt.Fprintf(t.Out, "\x1b[2m← %s (%d chars)\x1b[0m\n", name, len(output))
+		fmt.Fprintln(t.Out, cDim(fmt.Sprintf("← %s (%d chars)", name, len(output))))
 	}
 }
 

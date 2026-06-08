@@ -163,14 +163,14 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 
 	// Startup banner: model + context window, before the first prompt.
 	if ctxLen > 0 {
-		fmt.Printf("Model: %s (%s ctx)\n", sess.Model, llm.FormatTokens(ctxLen))
+		fmt.Printf("%s %s\n", repl.Colorize(repl.AnsiBold, "Model:"), repl.Colorize(repl.AnsiCyan, fmt.Sprintf("%s (%s ctx)", sess.Model, llm.FormatTokens(ctxLen))))
 	} else {
-		fmt.Printf("Model: %s (context size unknown)\n", sess.Model)
+		fmt.Printf("%s %s\n", repl.Colorize(repl.AnsiBold, "Model:"), repl.Colorize(repl.AnsiCyan, fmt.Sprintf("%s (context size unknown)", sess.Model)))
 	}
-	fmt.Println("Type /help for commands.")
+	fmt.Println(repl.Colorize(repl.AnsiDim, "Type /help for commands."))
 
 	runner := &repl.Runner{
-		Prompt:  ">>> ",
+		Prompt:  repl.Colorize(repl.AnsiCyan, ">>> "),
 		Out:     os.Stdout,
 		OnUser:  func(ctx context.Context, line string) error { return a.Run(ctx, line) },
 		OnClear: func() error { return sess.Clear() },
@@ -275,8 +275,8 @@ func pickGlobalSession(store *session.Store, cont, resume bool) (*session.Sessio
 		if err != nil {
 			return nil, err
 		}
-		fmt.Printf("Resuming %s [%s] (%d msgs, last %s)\n",
-			it.ID[:8], it.Model, it.MessageCount, it.UpdatedAt.Format("2006-01-02 15:04"))
+		fmt.Println(repl.Colorize(repl.AnsiGreen, fmt.Sprintf("Resuming %s [%s] (%d msgs, last %s)",
+			it.ID[:8], it.Model, it.MessageCount, it.UpdatedAt.Format("2006-01-02 15:04"))))
 		return sess, nil
 	}
 	// resume: interactive picker

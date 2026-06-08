@@ -56,7 +56,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			switch cmd {
 			case SlashClear:
 				if err := r.OnClear(); err != nil {
-					fmt.Fprintf(r.Out, "clear: %s\n", err)
+					fmt.Fprintln(r.Out, cRed(fmt.Sprintf("clear: %s", err)))
 				}
 			case SlashExit:
 				return r.OnExit()
@@ -71,7 +71,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 
 		if err := r.runTurn(ctx, line); err != nil {
-			fmt.Fprintf(r.Out, "error: %s\n", err)
+			fmt.Fprintln(r.Out, cRed(fmt.Sprintf("error: %s", err)))
 		}
 	}
 }
