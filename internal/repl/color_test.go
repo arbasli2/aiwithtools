@@ -2,7 +2,6 @@ package repl
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -20,7 +19,6 @@ func TestDetectColor_NonTTYDisabled(t *testing.T) {
 
 func TestDetectColor_NoColorEnvDisables(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	// Even /dev/tty (or similar) should report false when NO_COLOR is set.
 	f, _ := os.CreateTemp(t.TempDir(), "out")
 	defer f.Close()
 	if detectColor(f) {
@@ -47,6 +45,3 @@ func TestColorize_EnabledWrapsWithEscape(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
-
-// Smoke: regular file with NO_COLOR unset still disabled (not a char device).
-var _ = filepath.Separator

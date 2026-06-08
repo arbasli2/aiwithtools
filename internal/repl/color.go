@@ -25,13 +25,13 @@ func Colorize(code, s string) string {
 	return code + s + AnsiReset
 }
 
-// Convenience wrappers used across the package.
-func cBold(s string) string   { return Colorize(AnsiBold, s) }
-func cDim(s string) string    { return Colorize(AnsiDim, s) }
-func cRed(s string) string    { return Colorize(AnsiRed, s) }
-func cGreen(s string) string  { return Colorize(AnsiGreen, s) }
-func cYellow(s string) string { return Colorize(AnsiYellow, s) }
-func cCyan(s string) string   { return Colorize(AnsiCyan, s) }
+// Convenience wrappers. Exported for use from cmd/.
+func Bold(s string) string   { return Colorize(AnsiBold, s) }
+func Dim(s string) string    { return Colorize(AnsiDim, s) }
+func Red(s string) string    { return Colorize(AnsiRed, s) }
+func Green(s string) string  { return Colorize(AnsiGreen, s) }
+func Yellow(s string) string { return Colorize(AnsiYellow, s) }
+func Cyan(s string) string   { return Colorize(AnsiCyan, s) }
 
 // colorEnabled is set at package init time based on:
 //   - NO_COLOR env var (https://no-color.org)
