@@ -2,6 +2,10 @@
 
 A drop-in-feel Ollama wrapper with MCP-based tool calling and a ReAct agent loop.
 
+> Full **[User Manual](docs/USER_MANUAL.md)** covers every flag, slash
+> command, colour, environment variable, file location, and the
+> troubleshooting guide.
+
 ## Install
 
 ```bash
