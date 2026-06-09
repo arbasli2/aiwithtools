@@ -149,6 +149,51 @@ description: x
 	}
 }
 
+func TestLoad_CRLFFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\r\nname: crlf\r\ndescription: windows-style\r\n---\r\nBody"
+	mustWrite(t, filepath.Join(dir, "crlf", "SKILL.md"), content)
+	m, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := m.Get("crlf")
+	if s == nil {
+		t.Fatal("crlf skill missing")
+	}
+	if s.Description != "windows-style" {
+		t.Errorf("desc = %q, want windows-style", s.Description)
+	}
+	if s.Body != "Body" {
+		t.Errorf("body = %q, want Body", s.Body)
+	}
+}
+
+func TestRender_RejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "evil", "SKILL.md"), `---
+description: x
+---
+{{include: leak}}`)
+	// Create a symlink inside the skill folder pointing OUT of it.
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("PRIVATE"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "evil", "leak")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	m, _ := Load(dir)
+	got, err := m.Render("evil", "")
+	if err == nil {
+		t.Fatalf("expected symlink-escape error, got rendered: %q", got)
+	}
+	if strings.Contains(got, "PRIVATE") {
+		t.Errorf("PRIVATE content leaked despite error")
+	}
+}
+
 func TestRender_UnknownSkillError(t *testing.T) {
 	m, _ := Load(t.TempDir())
 	if _, err := m.Render("nope", ""); err == nil {

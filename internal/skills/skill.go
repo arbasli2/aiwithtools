@@ -30,6 +30,13 @@ type Manager struct {
 	order  []string // discovery order, alphabetised for stable listing
 }
 
+// NewEmpty returns a Manager with no skills. Useful as a fallback when
+// Load fails and the caller wants a usable (no-op) manager rather than
+// handling nil throughout.
+func NewEmpty() *Manager {
+	return &Manager{skills: map[string]*Skill{}}
+}
+
 // Load scans the given directory for skills. Each subdirectory containing
 // a SKILL.md becomes one skill. Returns an empty manager (no error) when
 // the directory doesn't exist, so a missing config dir is not fatal.
@@ -113,23 +120,29 @@ func parseSkill(data []byte, dirName, dir string) (*Skill, error) {
 
 // splitFrontmatter extracts a `---`-fenced YAML head if present.
 // Returns body (everything after the second ---), the parsed
-// frontmatter, and any error.
+// frontmatter, and any error. Tolerant of both LF and CRLF line
+// endings on both the opening and closing fences.
 func splitFrontmatter(data []byte) (string, frontmatter, error) {
 	text := string(data)
 	if !strings.HasPrefix(text, "---\n") && !strings.HasPrefix(text, "---\r\n") {
 		// no frontmatter
 		return strings.TrimLeft(text, " \t\r\n"), frontmatter{}, nil
 	}
-	// Skip the opening ---<newline>
 	rest := strings.TrimPrefix(text, "---\n")
 	rest = strings.TrimPrefix(rest, "---\r\n")
 
-	end := strings.Index(rest, "\n---")
+	// Find the closing fence, accepting either LF or CRLF before it.
+	endLF := strings.Index(rest, "\n---")
+	endCRLF := strings.Index(rest, "\r\n---")
+	end, fenceLen := endLF, len("\n---")
+	if endCRLF >= 0 && (end < 0 || endCRLF < end) {
+		end, fenceLen = endCRLF, len("\r\n---")
+	}
 	if end < 0 {
 		return "", frontmatter{}, fmt.Errorf("frontmatter opened with --- but never closed")
 	}
 	yamlPart := rest[:end]
-	body := rest[end+len("\n---"):]
+	body := rest[end+fenceLen:]
 	body = strings.TrimLeft(body, "\r\n")
 
 	var fm frontmatter

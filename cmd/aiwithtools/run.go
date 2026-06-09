@@ -135,12 +135,15 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 	llmClient := llm.New(ollamaClient)
 
 	// Load skills from ~/.config/aiwithtools/skills/. Missing dir is fine
-	// (returns an empty manager). Any other error degrades to empty manager
-	// + a warning so the REPL still starts.
+	// (returns an empty manager). Any other error degrades to an empty
+	// manager plus a visible warning on the startup banner so the user
+	// knows skills exist but couldn't be loaded.
 	skillMgr, err := skills.Load(filepath.Join(cfgDir, "skills"))
+	var skillLoadErr error
 	if err != nil {
+		skillLoadErr = err
 		slog.Warn("could not load skills", "err", err)
-		skillMgr, _ = skills.Load(filepath.Join(cfgDir, "skills-missing-marker-noexist"))
+		skillMgr = skills.NewEmpty()
 	}
 
 	var tools []llm.Tool
@@ -184,6 +187,9 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 		fmt.Printf("%s %s\n", repl.Bold("Model:"), repl.Cyan(fmt.Sprintf("%s (%s ctx)", sess.Model, llm.FormatTokens(ctxLen))))
 	} else {
 		fmt.Printf("%s %s\n", repl.Bold("Model:"), repl.Cyan(fmt.Sprintf("%s (context size unknown)", sess.Model)))
+	}
+	if skillLoadErr != nil {
+		fmt.Println(repl.Yellow(fmt.Sprintf("Warning: could not load skills (%s) — /skills will appear empty.", skillLoadErr)))
 	}
 	fmt.Println(repl.Dim("Type /help for commands."))
 

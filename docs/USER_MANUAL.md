@@ -254,9 +254,12 @@ Refer to the conventions:
 | `{{ARGUMENTS}}`          | Args after `/<name> ` (empty for model invocation) |
 | `{{include: <relpath>}}` | Contents of a file under the skill folder          |
 
-Includes are sandboxed to the skill folder — leading `/` or `..` in
-the path is rejected. Includes nest (an included file may itself use
-`{{include: …}}`) up to a depth of 8.
+Includes are sandboxed to the skill folder. Leading `/`, `..`
+segments, and symlinks that resolve outside the folder are all
+rejected — important when sharing skills, since a malicious
+`references/leak -> /etc/passwd` symlink would otherwise pull file
+contents into the model's context. Includes nest (an included file
+may itself use `{{include: …}}`) up to a depth of 8.
 
 ### Practical notes
 
