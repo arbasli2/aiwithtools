@@ -328,6 +328,44 @@ func TestRun_StreamingForwardsContentToStreamDelta(t *testing.T) {
 	}
 }
 
+func TestRun_StreamingWithToolCallsEndsStreamBeforeToolDisplay(t *testing.T) {
+	// Turn 1: commentary + tool call. Turn 2: final answer.
+	llmFake := &fakeLLM{responses: []api.Message{
+		{
+			Role:      "assistant",
+			Content:   "let me check",
+			ToolCalls: []api.ToolCall{toolCallWith("echo", map[string]any{})},
+		},
+		{Role: "assistant", Content: "all done"},
+	}}
+	mcp := &fakeMCP{out: map[string]string{"echo": "ok"}}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, mcp, &fakeSession{}, disp, 5)
+	a.Stream = true
+	if err := a.Run(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Turn 1 streamed "let me check"; turn 2 streamed "all done".
+	if got := disp.streamDeltas; len(got) != 2 || got[0] != "let me check" || got[1] != "all done" {
+		t.Errorf("streamDeltas = %q", got)
+	}
+	// AssistantStreamEnd fires once per streamed turn — two turns here.
+	if disp.streamEnded != 2 {
+		t.Errorf("streamEnded = %d, want 2", disp.streamEnded)
+	}
+	// Tool call shown.
+	if len(disp.starts) != 1 || disp.starts[0] != "echo" {
+		t.Errorf("starts = %v, want [echo]", disp.starts)
+	}
+	// No AssistantText for streamed content (would double-print).
+	for _, txt := range disp.texts {
+		if txt == "let me check" || txt == "all done" {
+			t.Errorf("streamed content emitted via AssistantText: %q", disp.texts)
+		}
+	}
+}
+
 func TestRun_NonStreamingUsesAssistantText(t *testing.T) {
 	llmFake := &fakeLLM{responses: []api.Message{
 		{Role: "assistant", Content: "hello"},

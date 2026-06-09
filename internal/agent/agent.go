@@ -64,6 +64,11 @@ func (a *Agent) Run(ctx context.Context, userInput string) error {
 	}
 
 	for i := 0; i < a.MaxIter; i++ {
+		// streamed tracks whether the chunk callback actually fired —
+		// the closure mutates it on the first delta. We need this signal
+		// after Chat returns so we know whether to (a) emit the closing
+		// newline via AssistantStreamEnd and (b) skip the otherwise-
+		// duplicate AssistantText call below.
 		var onChunk llm.ChunkFunc
 		streamed := false
 		if a.Stream {
