@@ -146,13 +146,15 @@ multi-day-old session does not confuse the model about what "today" is.
 
 ## Slash commands inside the REPL
 
-| Command         | Effect                                                           |
-|-----------------|------------------------------------------------------------------|
-| `/info`         | Show model, context size, used tokens (count + %), session id, message count, last-turn tokens. |
-| `/tools`        | List every connected MCP server and the tools it exposes. Run this if a tool isn't being called — it's the fastest way to check the model has access. |
-| `/clear`        | Drop all messages from the current session. The session row stays, so `--continue` still finds it (with an empty history). |
-| `/exit` or `/bye` | Quit the REPL.                                                |
-| `/help`         | Show the list of slash commands.                                 |
+| Command           | Effect                                                           |
+|-------------------|------------------------------------------------------------------|
+| `/info`           | Show model, context size, used tokens (count + %), session id, message count, last-turn tokens. |
+| `/tools`          | List every connected MCP server and the tools it exposes. Run this if a tool isn't being called — it's the fastest way to check the model has access. |
+| `/skills`         | List discovered skills with their descriptions.                  |
+| `/<name> [args]`  | Invoke a skill by name (e.g. `/translate French`). Args after the name are substituted into `{{ARGUMENTS}}`. |
+| `/clear`          | Drop all messages from the current session. The session row stays, so `--continue` still finds it (with an empty history). |
+| `/exit` or `/bye` | Quit the REPL.                                                   |
+| `/help`           | Show the list of slash commands.                                 |
 
 ---
 
@@ -198,6 +200,74 @@ merged on top of the parent process's environment (so `PATH`, `HOME`,
 etc. always flow through).
 
 ---
+
+## Skills
+
+Skills are reusable instruction packages — a folder per skill — that
+implement the
+[Anthropic Agent Skills standard](https://claude.com/blog/skills).
+Each skill is a directory under `~/.config/aiwithtools/skills/`
+containing a `SKILL.md` file plus optional supporting files.
+
+### Layout
+
+```
+~/.config/aiwithtools/skills/
+└── translate/
+    ├── SKILL.md
+    └── references/         (optional)
+        └── conventions.md
+```
+
+`SKILL.md` has YAML frontmatter (optional `name` defaults to the
+directory name, optional `description` is shown to the model and in
+`/skills`) followed by a Markdown body:
+
+```markdown
+---
+name: translate
+description: Translate text to a target language, preserving tone
+---
+Translate the following to {{ARGUMENTS}}, keeping formatting intact.
+Refer to the conventions:
+
+{{include: references/conventions.md}}
+```
+
+### Two ways to invoke
+
+1. **Explicitly, by the user.** Type `/<name> [args]` in the REPL. The
+   skill body is rendered (with `{{ARGUMENTS}}` replaced and any
+   `{{include: …}}` expanded) and sent as your next message.
+2. **By the model.** Skill names + descriptions are exposed to the
+   model via a synthetic `load_skill` tool. The model may decide
+   "this task matches the `review` skill" and call `load_skill(name=
+   "review")`. The body is returned as the tool result and the model
+   follows the instructions. This implements the standard's
+   *progressive disclosure*: short descriptions are always visible,
+   full bodies load only when needed.
+
+### Template syntax
+
+| Placeholder              | Meaning                                            |
+|--------------------------|----------------------------------------------------|
+| `{{ARGUMENTS}}`          | Args after `/<name> ` (empty for model invocation) |
+| `{{include: <relpath>}}` | Contents of a file under the skill folder          |
+
+Includes are sandboxed to the skill folder — leading `/` or `..` in
+the path is rejected. Includes nest (an included file may itself use
+`{{include: …}}`) up to a depth of 8.
+
+### Practical notes
+
+- A directory without a `SKILL.md` is silently ignored.
+- A missing `~/.config/aiwithtools/skills/` directory is also fine —
+  you just have no skills.
+- Skills with no description are still loaded but get a
+  `(no description)` placeholder in `/skills`.
+- The model's ability to choose the right skill depends on the
+  model. Larger models pick well; small models may need explicit
+  user invocation (`/<name>`).
 
 ## System prompt
 

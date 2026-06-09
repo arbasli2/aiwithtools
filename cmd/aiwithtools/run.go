@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"aiwithtools/internal/mcp"
 	"aiwithtools/internal/repl"
 	"aiwithtools/internal/session"
+	"aiwithtools/internal/skills"
 )
 
 func newRunCmd() *cobra.Command {
@@ -132,9 +134,22 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 	}
 	llmClient := llm.New(ollamaClient)
 
+	// Load skills from ~/.config/aiwithtools/skills/. Missing dir is fine
+	// (returns an empty manager). Any other error degrades to empty manager
+	// + a warning so the REPL still starts.
+	skillMgr, err := skills.Load(filepath.Join(cfgDir, "skills"))
+	if err != nil {
+		slog.Warn("could not load skills", "err", err)
+		skillMgr, _ = skills.Load(filepath.Join(cfgDir, "skills-missing-marker-noexist"))
+	}
+
 	var tools []llm.Tool
 	for _, t := range host.Tools() {
 		tools = append(tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	// Add the synthetic load_skill tool when any skills are configured.
+	if skillTool, ok := buildLoadSkillTool(skillMgr); ok {
+		tools = append(tools, skillTool)
 	}
 	ollamaTools, convErrs := llm.ToOllamaTools(tools)
 	for _, e := range convErrs {
@@ -151,7 +166,7 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 
 	llmAdapter := &llmAdapter{c: llmClient, sessSystem: sess.System, sessStart: sess.CreatedAt, now: time.Now}
 	sessAdapter := &sessionAdapter{s: sess}
-	mcpAdapter := &mcpAdapter{h: host, tools: ollamaTools}
+	mcpAdapter := &mcpAdapter{h: host, tools: ollamaTools, skills: skillMgr}
 
 	a := &agent.Agent{
 		LLM:           llmAdapter,
@@ -173,15 +188,98 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 	fmt.Println(repl.Dim("Type /help for commands."))
 
 	runner := &repl.Runner{
-		Prompt:  repl.Cyan(">>> "),
-		Out:     os.Stdout,
-		OnUser:  func(ctx context.Context, line string) error { return a.Run(ctx, line) },
-		OnClear: func() error { return sess.Clear() },
-		OnTools: func() string { return formatTools(host.Tools()) },
-		OnInfo:  func() string { return formatInfo(sess, a, ctxLen) },
-		OnExit:  func() error { return nil },
+		Prompt:   repl.Cyan(">>> "),
+		Out:      os.Stdout,
+		OnUser:   func(ctx context.Context, line string) error { return a.Run(ctx, line) },
+		OnClear:  func() error { return sess.Clear() },
+		OnTools:  func() string { return formatTools(host.Tools()) },
+		OnInfo:   func() string { return formatInfo(sess, a, ctxLen) },
+		OnSkills: func() string { return formatSkills(skillMgr) },
+		OnSkill:  func(line string) (string, bool, error) { return resolveSkillCommand(skillMgr, line) },
+		OnExit:   func() error { return nil },
 	}
 	return runner.Run(ctx)
+}
+
+// buildLoadSkillTool returns a synthetic llm.Tool that the model can
+// call to load any of the discovered skills. The tool description
+// embeds the list of skills so the model knows which names are valid
+// and what each one does — matching the "progressive disclosure"
+// pattern from the Anthropic Agent Skills standard.
+//
+// Returns ok=false when no skills are configured.
+func buildLoadSkillTool(mgr *skills.Manager) (llm.Tool, bool) {
+	all := mgr.List()
+	if len(all) == 0 {
+		return llm.Tool{}, false
+	}
+
+	var desc strings.Builder
+	desc.WriteString("Load detailed instructions for a specialised task. ")
+	desc.WriteString("Use this when the user's request matches one of these skills:\n")
+	for _, s := range all {
+		fmt.Fprintf(&desc, "- %s: %s\n", s.Name, s.Description)
+	}
+	desc.WriteString("Call with the skill's name; the response is the full instruction set to follow.")
+
+	// Build a JSON Schema with `name` as a required enum of skill names.
+	enum := make([]string, 0, len(all))
+	for _, s := range all {
+		enum = append(enum, s.Name)
+	}
+	enumJSON, _ := json.Marshal(enum)
+	schema := fmt.Sprintf(
+		`{"type":"object","properties":{"name":{"type":"string","enum":%s,"description":"Skill to load"}},"required":["name"]}`,
+		string(enumJSON),
+	)
+	return llm.Tool{
+		Name:        "load_skill",
+		Description: desc.String(),
+		InputSchema: json.RawMessage(schema),
+	}, true
+}
+
+// resolveSkillCommand handles a slash input that wasn't a built-in
+// (e.g. "/translate French"). Returns (rendered body, true, nil) if
+// the first token is a known skill, (...) ok=false otherwise so the
+// REPL can fall back to treating the line as ordinary text.
+func resolveSkillCommand(mgr *skills.Manager, line string) (string, bool, error) {
+	if !strings.HasPrefix(line, "/") {
+		return "", false, nil
+	}
+	rest := strings.TrimPrefix(line, "/")
+	parts := strings.SplitN(rest, " ", 2)
+	name := parts[0]
+	args := ""
+	if len(parts) > 1 {
+		args = strings.TrimSpace(parts[1])
+	}
+	if mgr.Get(name) == nil {
+		return "", false, nil
+	}
+	body, err := mgr.Render(name, args)
+	if err != nil {
+		return "", true, err
+	}
+	return body, true, nil
+}
+
+func formatSkills(mgr *skills.Manager) string {
+	all := mgr.List()
+	if len(all) == 0 {
+		return "(no skills loaded — drop a SKILL.md folder under ~/.config/aiwithtools/skills/)"
+	}
+	var b strings.Builder
+	b.WriteString("Available skills:\n")
+	for _, s := range all {
+		desc := s.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Fprintf(&b, "  /%s — %s\n", s.Name, desc)
+	}
+	b.WriteString("Invoke with `/<name> [args]`; the model may also call load_skill.")
+	return b.String()
 }
 
 // formatInfo renders the /info report.
@@ -379,11 +477,27 @@ func (a *sessionAdapter) Messages() []api.Message {
 }
 
 type mcpAdapter struct {
-	h     *mcp.Host
-	tools api.Tools
+	h      *mcp.Host
+	tools  api.Tools
+	skills *skills.Manager
 }
 
 func (a *mcpAdapter) Tools() api.Tools { return a.tools }
+
 func (a *mcpAdapter) Call(ctx context.Context, name string, args map[string]any) (string, error) {
+	// load_skill is a synthetic, app-side tool that reads SKILL.md
+	// rather than going out to MCP. It exists only when at least one
+	// skill is configured (see buildLoadSkillTool).
+	if name == "load_skill" {
+		skillName, _ := args["name"].(string)
+		if skillName == "" {
+			return "", fmt.Errorf("load_skill requires a 'name' argument")
+		}
+		body, err := a.skills.Render(skillName, "")
+		if err != nil {
+			return "", err
+		}
+		return body, nil
+	}
 	return a.h.Call(ctx, name, args)
 }

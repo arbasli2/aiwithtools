@@ -12,12 +12,19 @@ import (
 )
 
 type Runner struct {
-	Prompt  string
-	Out     io.Writer
-	OnUser  func(ctx context.Context, line string) error
-	OnClear func() error
-	OnTools func() string
-	OnInfo  func() string
+	Prompt   string
+	Out      io.Writer
+	OnUser   func(ctx context.Context, line string) error
+	OnClear  func() error
+	OnTools  func() string
+	OnInfo   func() string
+	OnSkills func() string
+	// OnSkill receives a slash input that was not recognised as a
+	// built-in (e.g. "/translate French"). It returns the rendered
+	// text to feed to OnUser (when ok=true), or ok=false if the input
+	// is not a known skill — in which case the REPL falls back to
+	// treating the line as ordinary text.
+	OnSkill func(line string) (body string, ok bool, err error)
 	OnExit  func() error
 }
 
@@ -62,12 +69,29 @@ func (r *Runner) Run(ctx context.Context) error {
 				return r.OnExit()
 			case SlashTools:
 				fmt.Fprintln(r.Out, r.OnTools())
+			case SlashSkills:
+				if r.OnSkills != nil {
+					fmt.Fprintln(r.Out, r.OnSkills())
+				}
 			case SlashInfo:
 				fmt.Fprintln(r.Out, r.OnInfo())
 			case SlashHelp:
 				fmt.Fprintln(r.Out, HelpText)
 			}
 			continue
+		}
+
+		// Unknown slash inputs may be a skill (/translate French).
+		if strings.HasPrefix(line, "/") && r.OnSkill != nil {
+			body, ok, err := r.OnSkill(line)
+			if err != nil {
+				fmt.Fprintln(r.Out, Red(fmt.Sprintf("skill: %s", err)))
+				continue
+			}
+			if ok {
+				line = body
+				// fall through into runTurn with the rendered body
+			}
 		}
 
 		if err := r.runTurn(ctx, line); err != nil {

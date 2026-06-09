@@ -11,6 +11,7 @@ const (
 	SlashTools
 	SlashHelp
 	SlashInfo
+	SlashSkills
 )
 
 func ParseSlash(input string) (SlashCommand, bool) {
@@ -29,6 +30,8 @@ func ParseSlash(input string) (SlashCommand, bool) {
 		return SlashHelp, true
 	case "/info":
 		return SlashInfo, true
+	case "/skills":
+		return SlashSkills, true
 	}
 	return SlashUnknown, false
 }
@@ -36,6 +39,8 @@ func ParseSlash(input string) (SlashCommand, bool) {
 const HelpText = `Slash commands:
   /info    show model, context window, session, and last-turn tokens
   /tools   list connected MCP servers and their tools
+  /skills  list available skills (loaded from ~/.config/aiwithtools/skills)
+  /<name>  invoke a skill by name (e.g. /translate French); pass args after a space
   /clear   drop all messages from this session (session stays, --continue still finds it)
   /exit    quit (also /bye)
   /help    show this message`
