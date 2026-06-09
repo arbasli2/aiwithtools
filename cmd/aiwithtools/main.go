@@ -16,6 +16,7 @@ func main() {
 		rootResume  bool
 		rootMaxIter int
 		rootVerbose bool
+		rootStream  bool
 	)
 	root := &cobra.Command{
 		Use:   "aiwithtools",
@@ -33,13 +34,14 @@ Common forms:
 			if !rootCont && !rootResume {
 				return cmd.Help()
 			}
-			return runRootResume(cmd.Context(), rootCont, rootResume, rootMaxIter, rootVerbose)
+			return runRootResume(cmd.Context(), rootCont, rootResume, rootMaxIter, rootVerbose, rootStream)
 		},
 	}
 	root.Flags().BoolVar(&rootCont, "continue", false, "resume the most recent session (any model)")
 	root.Flags().BoolVar(&rootResume, "resume", false, "pick a session to resume (any model)")
 	root.Flags().IntVar(&rootMaxIter, "max-iterations", 25, "maximum ReAct iterations per turn")
 	root.Flags().BoolVar(&rootVerbose, "verbose", false, "print full tool outputs in the REPL")
+	root.Flags().BoolVar(&rootStream, "stream", true, "stream assistant responses as they arrive (--stream=false for atomic output)")
 	root.MarkFlagsMutuallyExclusive("continue", "resume")
 
 	root.AddCommand(newRunCmd())

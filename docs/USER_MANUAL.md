@@ -102,6 +102,16 @@ aiwithtools run <model> --max-iterations 10
 
 # Print full tool outputs in the REPL (default: only summary)
 aiwithtools run <model> --verbose
+
+# Streaming is on by default; disable for atomic output
+aiwithtools run <model> --stream=false
+```
+
+The `--stream`, `--max-iterations`, `--verbose`, and `--system` flags
+also work at the root level alongside `--continue` / `--resume`:
+
+```bash
+aiwithtools --continue --stream=false
 ```
 
 Exit the REPL with `/exit`, `/bye`, or `Ctrl-D` at an empty prompt.

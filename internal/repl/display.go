@@ -32,3 +32,17 @@ func (t Terminal) ToolCallEnd(name, output string, err error) {
 func (t Terminal) AssistantText(content string) {
 	fmt.Fprintln(t.Out, content)
 }
+
+// AssistantStreamDelta writes a streaming chunk raw with no trailing
+// newline. Stdout writes are flushed implicitly by os.Stdout so the
+// user sees tokens as they arrive.
+func (t Terminal) AssistantStreamDelta(delta string) {
+	fmt.Fprint(t.Out, delta)
+}
+
+// AssistantStreamEnd emits the single newline that closes a streamed
+// turn — separated from delta writes so the stream renders as one line
+// in the terminal without per-chunk newlines.
+func (t Terminal) AssistantStreamEnd() {
+	fmt.Fprintln(t.Out)
+}

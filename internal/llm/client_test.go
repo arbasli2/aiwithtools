@@ -30,7 +30,7 @@ func TestChat_ReturnsFinalAssistantMessage(t *testing.T) {
 
 	res, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "hi"}},
-		nil,
+		nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestChat_ReturnsDoneReasonAndTokenCounts(t *testing.T) {
 	c := New(api.NewClient(u, http.DefaultClient))
 
 	res, err := c.Chat(context.Background(), "test",
-		[]api.Message{{Role: "user", Content: "hi"}}, nil)
+		[]api.Message{{Role: "user", Content: "hi"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,82 @@ func TestChat_ReturnsDoneReasonAndTokenCounts(t *testing.T) {
 	}
 	if res.PromptTokens != 1024 || res.EvalTokens != 256 {
 		t.Errorf("tokens = (%d, %d), want (1024, 256)", res.PromptTokens, res.EvalTokens)
+	}
+}
+
+func TestChat_StreamsChunks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		enc := json.NewEncoder(w)
+		// Three deltas: "Hello", " ", "world"; then a final Done chunk.
+		for _, d := range []string{"Hello", " ", "world"} {
+			_ = enc.Encode(api.ChatResponse{
+				Model:   "test",
+				Message: api.Message{Role: "assistant", Content: d},
+				Done:    false,
+			})
+		}
+		final := api.ChatResponse{Model: "test", Done: true, DoneReason: "stop"}
+		final.PromptEvalCount = 4
+		final.EvalCount = 3
+		_ = enc.Encode(final)
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	c := New(api.NewClient(u, http.DefaultClient))
+
+	var seen []string
+	res, err := c.Chat(context.Background(), "test",
+		[]api.Message{{Role: "user", Content: "hi"}}, nil,
+		func(delta string) { seen = append(seen, delta) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDeltas := []string{"Hello", " ", "world"}
+	if len(seen) != len(wantDeltas) {
+		t.Fatalf("seen=%v, want %v", seen, wantDeltas)
+	}
+	for i := range seen {
+		if seen[i] != wantDeltas[i] {
+			t.Errorf("seen[%d] = %q, want %q", i, seen[i], wantDeltas[i])
+		}
+	}
+	if res.Message.Content != "Hello world" {
+		t.Errorf("accumulated content = %q", res.Message.Content)
+	}
+	if res.PromptTokens != 4 || res.EvalTokens != 3 {
+		t.Errorf("tokens = (%d, %d)", res.PromptTokens, res.EvalTokens)
+	}
+}
+
+func TestChat_NilChunkCallbackStillAccumulates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		enc := json.NewEncoder(w)
+		_ = enc.Encode(api.ChatResponse{
+			Model:   "test",
+			Message: api.Message{Role: "assistant", Content: "ab"},
+		})
+		_ = enc.Encode(api.ChatResponse{
+			Model:   "test",
+			Message: api.Message{Role: "assistant", Content: "cd"},
+			Done:    true,
+		})
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL)
+	c := New(api.NewClient(u, http.DefaultClient))
+
+	res, err := c.Chat(context.Background(), "test",
+		[]api.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Message.Content != "abcd" {
+		t.Errorf("content = %q, want abcd", res.Message.Content)
 	}
 }
 
@@ -94,7 +170,7 @@ func TestChat_SurfacesToolCalls(t *testing.T) {
 
 	res, err := c.Chat(context.Background(), "test",
 		[]api.Message{{Role: "user", Content: "weather?"}},
-		nil,
+		nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

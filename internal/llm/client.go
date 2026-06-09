@@ -8,6 +8,11 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
+// ChunkFunc is called for each content delta as the model streams its
+// response. Useful for live display. Pass nil to disable live forwarding
+// — the full message is still returned via ChatResult.Message.
+type ChunkFunc func(delta string)
+
 type Client struct {
 	ollama *api.Client
 }
@@ -24,32 +29,54 @@ type ChatResult struct {
 	EvalTokens   int // output (generated) tokens
 }
 
-// Chat sends a single non-streaming chat request and returns the
-// assistant message, Ollama's done_reason, and per-turn token counts.
-func (c *Client) Chat(ctx context.Context, model string, messages []api.Message, tools api.Tools) (*ChatResult, error) {
-	streamFalse := false
+// Chat sends a streaming chat request. Each content delta is forwarded
+// to onChunk (if non-nil) as it arrives; tool calls, done_reason, and
+// token counts are read from the final chunk. The returned ChatResult
+// always contains the fully accumulated assistant message so callers
+// can persist it without observing the stream.
+func (c *Client) Chat(ctx context.Context, model string, messages []api.Message, tools api.Tools, onChunk ChunkFunc) (*ChatResult, error) {
+	streamTrue := true
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: messages,
-		Stream:   &streamFalse,
+		Stream:   &streamTrue,
 		Tools:    tools,
 	}
 
 	var res ChatResult
-	var last api.Message
+	var contentBuf, thinkingBuf strings.Builder
+	var toolCalls []api.ToolCall
+
 	err := c.ollama.Chat(ctx, req, func(resp api.ChatResponse) error {
-		// With Stream=false the callback fires once with the final
-		// response, so all of these fields are the terminal values.
-		last = resp.Message
-		res.DoneReason = resp.DoneReason
-		res.PromptTokens = resp.PromptEvalCount
-		res.EvalTokens = resp.EvalCount
+		if resp.Message.Content != "" {
+			contentBuf.WriteString(resp.Message.Content)
+			if onChunk != nil {
+				onChunk(resp.Message.Content)
+			}
+		}
+		if resp.Message.Thinking != "" {
+			thinkingBuf.WriteString(resp.Message.Thinking)
+		}
+		if len(resp.Message.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, resp.Message.ToolCalls...)
+		}
+		if resp.Done {
+			res.DoneReason = resp.DoneReason
+			res.PromptTokens = resp.PromptEvalCount
+			res.EvalTokens = resp.EvalCount
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ollama chat: %w", err)
 	}
-	res.Message = &last
+
+	res.Message = &api.Message{
+		Role:      "assistant",
+		Content:   contentBuf.String(),
+		Thinking:  thinkingBuf.String(),
+		ToolCalls: toolCalls,
+	}
 	return &res, nil
 }
 

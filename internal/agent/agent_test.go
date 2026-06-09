@@ -18,11 +18,17 @@ type fakeLLM struct {
 	calls        int
 }
 
-func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*llm.ChatResult, error) {
+func (f *fakeLLM) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools, onChunk llm.ChunkFunc) (*llm.ChatResult, error) {
 	if f.calls >= len(f.responses) {
 		return nil, errors.New("fakeLLM exhausted")
 	}
 	r := f.responses[f.calls]
+	// Simulate streaming by forwarding the full content as a single
+	// "chunk" — enough for tests that care about whether the agent
+	// wired the callback through to the Display.
+	if onChunk != nil && r.Content != "" {
+		onChunk(r.Content)
+	}
 	out := &llm.ChatResult{Message: &r}
 	if f.calls < len(f.reasons) {
 		out.DoneReason = f.reasons[f.calls]
@@ -51,16 +57,20 @@ func (f *fakeMCP) Call(ctx context.Context, name string, args map[string]any) (s
 }
 
 type captureDisplay struct {
-	starts []string
-	ends   []string
-	texts []string
+	starts       []string
+	ends         []string
+	texts        []string
+	streamDeltas []string
+	streamEnded  int
 }
 
 func (c *captureDisplay) ToolCallStart(n string, _ map[string]any) {
 	c.starts = append(c.starts, n)
 }
-func (c *captureDisplay) ToolCallEnd(n, _ string, _ error) { c.ends = append(c.ends, n) }
-func (c *captureDisplay) AssistantText(s string)          { c.texts = append(c.texts, s) }
+func (c *captureDisplay) ToolCallEnd(n, _ string, _ error)  { c.ends = append(c.ends, n) }
+func (c *captureDisplay) AssistantText(s string)            { c.texts = append(c.texts, s) }
+func (c *captureDisplay) AssistantStreamDelta(delta string) { c.streamDeltas = append(c.streamDeltas, delta) }
+func (c *captureDisplay) AssistantStreamEnd()               { c.streamEnded++ }
 
 type fakeSession struct {
 	msgs []api.Message
@@ -290,6 +300,52 @@ func TestRun_NoContextWarningWhenLengthUnknown(t *testing.T) {
 	}
 	if len(disp.texts) != 1 {
 		t.Errorf("texts = %q, want only content (no warning when ctx unknown)", disp.texts)
+	}
+}
+
+func TestRun_StreamingForwardsContentToStreamDelta(t *testing.T) {
+	llmFake := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", Content: "hello"},
+	}}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, &fakeMCP{}, &fakeSession{}, disp, 5)
+	a.Stream = true
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.streamDeltas) != 1 || disp.streamDeltas[0] != "hello" {
+		t.Errorf("streamDeltas = %q", disp.streamDeltas)
+	}
+	if disp.streamEnded != 1 {
+		t.Errorf("streamEnded = %d, want 1", disp.streamEnded)
+	}
+	// AssistantText must NOT be called for the same content when
+	// streaming — otherwise the user sees it twice.
+	for _, txt := range disp.texts {
+		if txt == "hello" {
+			t.Errorf("content emitted via AssistantText too: %q", disp.texts)
+		}
+	}
+}
+
+func TestRun_NonStreamingUsesAssistantText(t *testing.T) {
+	llmFake := &fakeLLM{responses: []api.Message{
+		{Role: "assistant", Content: "hello"},
+	}}
+	disp := &captureDisplay{}
+	a := newAgent(llmFake, &fakeMCP{}, &fakeSession{}, disp, 5)
+	a.Stream = false
+	if err := a.Run(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.streamDeltas) != 0 {
+		t.Errorf("streamDeltas should be empty with Stream=false: %q", disp.streamDeltas)
+	}
+	if disp.streamEnded != 0 {
+		t.Errorf("streamEnded = %d, want 0", disp.streamEnded)
+	}
+	if len(disp.texts) != 1 || disp.texts[0] != "hello" {
+		t.Errorf("texts = %q, want [hello]", disp.texts)
 	}
 }
 

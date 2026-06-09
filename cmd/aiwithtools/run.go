@@ -27,13 +27,14 @@ func newRunCmd() *cobra.Command {
 		systemFile string
 		maxIter    int
 		verbose    bool
+		stream     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run <model>",
 		Short: "Start a chat session with the given model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRun(cmd.Context(), args[0], cont, resume, systemFile, maxIter, verbose)
+			return runRun(cmd.Context(), args[0], cont, resume, systemFile, maxIter, verbose, stream)
 		},
 	}
 	cmd.Flags().BoolVar(&cont, "continue", false, "resume the most recent session for this model")
@@ -41,11 +42,12 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&systemFile, "system", "", "override system prompt file (default: ~/.config/aiwithtools/system.md)")
 	cmd.Flags().IntVar(&maxIter, "max-iterations", 25, "maximum ReAct iterations per turn")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print full tool outputs in the REPL")
+	cmd.Flags().BoolVar(&stream, "stream", true, "stream assistant responses as they arrive (--stream=false for atomic output)")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
 	return cmd
 }
 
-func runRun(ctx context.Context, model string, cont, resume bool, systemFile string, maxIter int, verbose bool) error {
+func runRun(ctx context.Context, model string, cont, resume bool, systemFile string, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
 	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
@@ -78,13 +80,13 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 			return err
 		}
 	}
-	return runReplForSession(ctx, sess, maxIter, verbose)
+	return runReplForSession(ctx, sess, maxIter, verbose, stream)
 }
 
 // runRootResume implements `aiwithtools --continue` / `aiwithtools --resume`
 // at the root command level. The session's model is used for the agent;
 // no positional model argument is needed.
-func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose bool) error {
+func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
 	if err := os.MkdirAll(dataD, 0700); err != nil {
@@ -101,12 +103,12 @@ func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose 
 	if err != nil {
 		return err
 	}
-	return runReplForSession(ctx, sess, maxIter, verbose)
+	return runReplForSession(ctx, sess, maxIter, verbose, stream)
 }
 
 // runReplForSession is the shared core: set up MCP host, LLM client,
 // agent, and REPL given an already-resolved session.
-func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, verbose bool) error {
+func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
 	user := os.Getenv("USER")
@@ -159,6 +161,7 @@ func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, 
 		Model:         sess.Model,
 		MaxIter:       maxIter,
 		ContextLength: ctxLen,
+		Stream:        stream,
 	}
 
 	// Startup banner: model + context window, before the first prompt.
@@ -326,7 +329,7 @@ type llmAdapter struct {
 	now        func() time.Time
 }
 
-func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools) (*llm.ChatResult, error) {
+func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message, tools api.Tools, onChunk llm.ChunkFunc) (*llm.ChatResult, error) {
 	built := llm.BuildSystemMessage(a.sessSystem, a.sessStart, a.now())
 	withSystem := make([]api.Message, 0, len(msgs)+1)
 	withSystem = append(withSystem, api.Message{Role: "system", Content: built})
@@ -336,7 +339,7 @@ func (a *llmAdapter) Chat(ctx context.Context, model string, msgs []api.Message,
 		}
 		withSystem = append(withSystem, m)
 	}
-	return a.c.Chat(ctx, model, withSystem, tools)
+	return a.c.Chat(ctx, model, withSystem, tools, onChunk)
 }
 
 type sessionAdapter struct{ s *session.Session }
