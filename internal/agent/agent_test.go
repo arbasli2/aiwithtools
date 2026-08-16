@@ -67,10 +67,12 @@ type captureDisplay struct {
 func (c *captureDisplay) ToolCallStart(n string, _ map[string]any) {
 	c.starts = append(c.starts, n)
 }
-func (c *captureDisplay) ToolCallEnd(n, _ string, _ error)  { c.ends = append(c.ends, n) }
-func (c *captureDisplay) AssistantText(s string)            { c.texts = append(c.texts, s) }
-func (c *captureDisplay) AssistantStreamDelta(delta string) { c.streamDeltas = append(c.streamDeltas, delta) }
-func (c *captureDisplay) AssistantStreamEnd()               { c.streamEnded++ }
+func (c *captureDisplay) ToolCallEnd(n, _ string, _ error) { c.ends = append(c.ends, n) }
+func (c *captureDisplay) AssistantText(s string)           { c.texts = append(c.texts, s) }
+func (c *captureDisplay) AssistantStreamDelta(delta string) {
+	c.streamDeltas = append(c.streamDeltas, delta)
+}
+func (c *captureDisplay) AssistantStreamEnd() { c.streamEnded++ }
 
 type fakeSession struct {
 	msgs []api.Message
