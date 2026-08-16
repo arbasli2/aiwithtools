@@ -68,6 +68,12 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile, mc
 		return err
 	}
 
+	// Before the store, so a bad --mcp path can't orphan a session.
+	mcfg, err := loadMCPConfig(mcpFile)
+	if err != nil {
+		return err
+	}
+
 	store, err := session.Open(filepath.Join(dataD, "sessions.db"))
 	if err != nil {
 		return err
@@ -84,13 +90,40 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile, mc
 			return err
 		}
 	}
-	return runReplForSession(ctx, sess, mcpFile, maxIter, verbose, stream)
+	return runReplForSession(ctx, sess, mcfg, maxIter, verbose, stream)
+}
+
+// loadMCPConfig resolves and loads the MCP config. A missing default
+// config is fine — MCP servers are optional — but a missing --mcp path
+// is a typo worth failing on, rather than starting up silently with no
+// tools. Callers run this before creating a session so a bad path
+// doesn't leave an empty session behind.
+func loadMCPConfig(mcpFile string) (*mcp.Config, error) {
+	home, _ := os.UserHomeDir()
+	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
+	user := os.Getenv("USER")
+
+	mcfg, err := mcp.LoadConfig(mcpConfigPath(cfgDir, mcpFile), home, user)
+	if err != nil {
+		if mcpFile != "" || !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("mcp config: %w", err)
+		}
+	}
+	if mcfg == nil {
+		mcfg = &mcp.Config{}
+	}
+	return mcfg, nil
 }
 
 // runRootResume implements `aiwithtools --continue` / `aiwithtools --resume`
 // at the root command level. The session's model is used for the agent;
 // no positional model argument is needed.
 func runRootResume(ctx context.Context, cont, resume bool, mcpFile string, maxIter int, verbose, stream bool) error {
+	mcfg, err := loadMCPConfig(mcpFile)
+	if err != nil {
+		return err
+	}
+
 	home, _ := os.UserHomeDir()
 	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
 	if err := os.MkdirAll(dataD, 0700); err != nil {
@@ -107,28 +140,15 @@ func runRootResume(ctx context.Context, cont, resume bool, mcpFile string, maxIt
 	if err != nil {
 		return err
 	}
-	return runReplForSession(ctx, sess, mcpFile, maxIter, verbose, stream)
+	return runReplForSession(ctx, sess, mcfg, maxIter, verbose, stream)
 }
 
 // runReplForSession is the shared core: set up MCP host, LLM client,
 // agent, and REPL given an already-resolved session.
-func runReplForSession(ctx context.Context, sess *session.Session, mcpFile string, maxIter int, verbose, stream bool) error {
+func runReplForSession(ctx context.Context, sess *session.Session, mcfg *mcp.Config, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
-	user := os.Getenv("USER")
 
-	mcfg, err := mcp.LoadConfig(mcpConfigPath(cfgDir, mcpFile), home, user)
-	if err != nil {
-		// A missing default config is fine — MCP servers are optional.
-		// A missing --mcp path is a typo worth failing on, rather than
-		// starting up silently with no tools.
-		if mcpFile != "" || !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("mcp config: %w", err)
-		}
-	}
-	if mcfg == nil {
-		mcfg = &mcp.Config{}
-	}
 	host, err := mcp.OpenHost(ctx, mcfg)
 	if err != nil {
 		return fmt.Errorf("mcp host: %w", err)
