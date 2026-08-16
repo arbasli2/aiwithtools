@@ -23,6 +23,22 @@ whichever the servers you want need:
 `npx` and `uvx` fetch and run the server on demand — nothing to install
 ahead of time once Node / uv are present.
 
+### Why the Python servers pin `mcp<2`
+
+The Python MCP SDK went to 2.0.0 with breaking renames (`McpError` →
+`MCPError`, and `Server.list_tools` removed). As of this writing the
+published `mcp-server-fetch`, `mcp-server-git` and `mcp-server-time`
+releases still target the 1.x API, so a bare `uvx mcp-server-fetch`
+resolves the 2.x SDK and dies at import:
+
+```
+ImportError: cannot import name 'McpError' from 'mcp.shared.exceptions'
+```
+
+`uvx --with 'mcp<2' …` holds the SDK at 1.x and they start cleanly.
+Drop the `--with` once upstream ships 2.x-compatible releases. Node
+servers are unaffected.
+
 ## Catalog
 
 | Server               | What it does                                            | Runtime         | Notes              |
@@ -57,15 +73,15 @@ servers you don't want — each entry is independent.
     },
     "fetch": {
       "command": "uvx",
-      "args": ["mcp-server-fetch"]
+      "args": ["--with", "mcp<2", "mcp-server-fetch"]
     },
     "git": {
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "~/src/aiwithtools"]
+      "args": ["--with", "mcp<2", "mcp-server-git", "--repository", "~/src/aiwithtools"]
     },
     "time": {
       "command": "uvx",
-      "args": ["mcp-server-time"]
+      "args": ["--with", "mcp<2", "mcp-server-time"]
     },
     "memory": {
       "command": "npx",

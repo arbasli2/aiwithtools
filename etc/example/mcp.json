@@ -10,15 +10,15 @@
     },
     "fetch": {
       "command": "uvx",
-      "args": ["mcp-server-fetch"]
+      "args": ["--with", "mcp<2", "mcp-server-fetch"]
     },
     "git": {
       "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "~/src/aiwithtools"]
+      "args": ["--with", "mcp<2", "mcp-server-git", "--repository", "~/src/aiwithtools"]
     },
     "time": {
       "command": "uvx",
-      "args": ["mcp-server-time"]
+      "args": ["--with", "mcp<2", "mcp-server-time"]
     },
     "memory": {
       "command": "npx",
