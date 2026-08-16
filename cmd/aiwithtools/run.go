@@ -27,6 +27,7 @@ func newRunCmd() *cobra.Command {
 		cont       bool
 		resume     bool
 		systemFile string
+		mcpFile    string
 		maxIter    int
 		verbose    bool
 		stream     bool
@@ -36,12 +37,13 @@ func newRunCmd() *cobra.Command {
 		Short: "Start a chat session with the given model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRun(cmd.Context(), args[0], cont, resume, systemFile, maxIter, verbose, stream)
+			return runRun(cmd.Context(), args[0], cont, resume, systemFile, mcpFile, maxIter, verbose, stream)
 		},
 	}
 	cmd.Flags().BoolVar(&cont, "continue", false, "resume the most recent session for this model")
 	cmd.Flags().BoolVar(&resume, "resume", false, "pick a session for this model to resume")
 	cmd.Flags().StringVar(&systemFile, "system", "", "override system prompt file (default: ~/.config/aiwithtools/system.md)")
+	cmd.Flags().StringVar(&mcpFile, "mcp", "", "override MCP config file (default: ~/.config/aiwithtools/mcp.json)")
 	cmd.Flags().IntVar(&maxIter, "max-iterations", 25, "maximum ReAct iterations per turn")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print full tool outputs in the REPL")
 	cmd.Flags().BoolVar(&stream, "stream", true, "stream assistant responses as they arrive (--stream=false for atomic output)")
@@ -49,7 +51,7 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-func runRun(ctx context.Context, model string, cont, resume bool, systemFile string, maxIter int, verbose, stream bool) error {
+func runRun(ctx context.Context, model string, cont, resume bool, systemFile, mcpFile string, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
 	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
@@ -82,13 +84,13 @@ func runRun(ctx context.Context, model string, cont, resume bool, systemFile str
 			return err
 		}
 	}
-	return runReplForSession(ctx, sess, maxIter, verbose, stream)
+	return runReplForSession(ctx, sess, mcpFile, maxIter, verbose, stream)
 }
 
 // runRootResume implements `aiwithtools --continue` / `aiwithtools --resume`
 // at the root command level. The session's model is used for the agent;
 // no positional model argument is needed.
-func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose, stream bool) error {
+func runRootResume(ctx context.Context, cont, resume bool, mcpFile string, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	dataD := dataDir(home, os.Getenv("XDG_DATA_HOME"))
 	if err := os.MkdirAll(dataD, 0700); err != nil {
@@ -105,19 +107,24 @@ func runRootResume(ctx context.Context, cont, resume bool, maxIter int, verbose,
 	if err != nil {
 		return err
 	}
-	return runReplForSession(ctx, sess, maxIter, verbose, stream)
+	return runReplForSession(ctx, sess, mcpFile, maxIter, verbose, stream)
 }
 
 // runReplForSession is the shared core: set up MCP host, LLM client,
 // agent, and REPL given an already-resolved session.
-func runReplForSession(ctx context.Context, sess *session.Session, maxIter int, verbose, stream bool) error {
+func runReplForSession(ctx context.Context, sess *session.Session, mcpFile string, maxIter int, verbose, stream bool) error {
 	home, _ := os.UserHomeDir()
 	cfgDir := configDir(home, os.Getenv("XDG_CONFIG_HOME"))
 	user := os.Getenv("USER")
 
-	mcfg, err := mcp.LoadConfig(filepath.Join(cfgDir, "mcp.json"), home, user)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("mcp config: %w", err)
+	mcfg, err := mcp.LoadConfig(mcpConfigPath(cfgDir, mcpFile), home, user)
+	if err != nil {
+		// A missing default config is fine — MCP servers are optional.
+		// A missing --mcp path is a typo worth failing on, rather than
+		// starting up silently with no tools.
+		if mcpFile != "" || !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("mcp config: %w", err)
+		}
 	}
 	if mcfg == nil {
 		mcfg = &mcp.Config{}

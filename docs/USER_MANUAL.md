@@ -97,6 +97,9 @@ aiwithtools run nemotron-3-nano:30b-cloud --resume
 # Override the system prompt file for this session
 aiwithtools run <model> --system /path/to/prompt.md
 
+# Override the MCP config file for this session
+aiwithtools run <model> --mcp /path/to/mcp.json
+
 # Cap the agent's tool-loop iterations (default 25)
 aiwithtools run <model> --max-iterations 10
 
@@ -107,12 +110,16 @@ aiwithtools run <model> --verbose
 aiwithtools run <model> --stream=false
 ```
 
-The `--stream`, `--max-iterations`, `--verbose`, and `--system` flags
-also work at the root level alongside `--continue` / `--resume`:
+The `--stream`, `--max-iterations`, `--verbose`, and `--mcp` flags also
+work at the root level alongside `--continue` / `--resume`:
 
 ```bash
 aiwithtools --continue --stream=false
+aiwithtools --continue --mcp /path/to/mcp.json
 ```
+
+`--system` is `run`-only: a resumed session already carries the system
+prompt it was created with.
 
 Exit the REPL with `/exit`, `/bye`, or `Ctrl-D` at an empty prompt.
 `Ctrl-C` at the prompt clears the current line and re-prompts;
@@ -162,7 +169,9 @@ multi-day-old session does not confuse the model about what "today" is.
 
 MCP servers expose tools the model can call. Configure them in
 `~/.config/aiwithtools/mcp.json` — the format matches Claude Code and
-Claude Desktop.
+Claude Desktop. Point at a different file for one session with
+`--mcp <path>`; unlike the default, a `--mcp` path that doesn't exist
+is an error rather than a silent start with no tools.
 
 A starter catalog of recommended servers (filesystem, fetch, git,
 memory, web search, …) with a drop-in config lives in
@@ -188,8 +197,9 @@ MCP server `command` and `args` (this CLI handles them itself so the
 JSON file is portable across machines). Other environment variables in
 `command`/`args` are **not** expanded — write them literally, hard-code
 the path, or move them into the `env` map. Flags like `--system <path>`
-pass through your shell's normal expansion only — if you write
-`--system $HOME/foo.md` your shell expands it, the CLI does not.
+and `--mcp <path>` pass through your shell's normal expansion only — if
+you write `--system $HOME/foo.md` your shell expands it, the CLI does
+not.
 
 **Name collisions**: tools are exposed to the model as
 `<server>__<toolname>` (e.g. `text-saver__save_text`). Two servers can

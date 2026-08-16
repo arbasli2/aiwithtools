@@ -107,6 +107,13 @@ After editing the file, restart aiwithtools and run `/tools` in the
 REPL to confirm each server connected. Tools appear as
 `<server>__<toolname>` (e.g. `filesystem__read_text_file`).
 
+To try this catalog without touching your own config, point `--mcp` at
+a copy:
+
+```bash
+aiwithtools run <model> --mcp etc/example/mcp.json
+```
+
 `~/…`, `$HOME` and `$USER` in `command` and `args` are expanded by
 aiwithtools before the server is spawned. That's a convenience this
 client adds — other MCP clients may want absolute paths instead, so
