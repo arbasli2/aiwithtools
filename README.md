@@ -33,6 +33,10 @@ Create `~/.config/aiwithtools/mcp.json` — same format as Claude Code:
 }
 ```
 
+Looking for servers to plug in? See **[docs/MCP_SERVERS.md](docs/MCP_SERVERS.md)**
+for a starter catalog (filesystem, fetch, git, memory, web search, …)
+with a drop-in config.
+
 Optional: `~/.config/aiwithtools/system.md` with your default system prompt.
 
 ## Use

@@ -164,6 +164,10 @@ MCP servers expose tools the model can call. Configure them in
 `~/.config/aiwithtools/mcp.json` — the format matches Claude Code and
 Claude Desktop.
 
+A starter catalog of recommended servers (filesystem, fetch, git,
+memory, web search, …) with a drop-in config lives in
+[`docs/MCP_SERVERS.md`](MCP_SERVERS.md).
+
 ```json
 {
   "mcpServers": {
